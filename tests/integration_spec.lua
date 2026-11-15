@@ -859,6 +859,21 @@ describe("integration", function()
 			local can = guard.can_reload(1)
 			assert.is_true(can, "Should allow reload after reset")
 		end)
+
+		it("should never modify molten_tick_rate during reload (cached-once by Molten)", function()
+			vim.g.molten_tick_rate = nil
+			local release = guard.begin_reload(1)
+			assert.is_nil(vim.g.molten_tick_rate, "begin must not set safe_tick_rate (poisons Molten init)")
+			release()
+			assert.is_nil(vim.g.molten_tick_rate)
+
+			vim.g.molten_tick_rate = 100
+			release = guard.begin_reload(2)
+			assert.are.equal(100, vim.g.molten_tick_rate, "begin must leave an existing rate untouched")
+			release()
+			assert.are.equal(100, vim.g.molten_tick_rate, "end must leave it untouched too")
+			vim.g.molten_tick_rate = nil
+		end)
 	end)
 
 	-- =========================================================================

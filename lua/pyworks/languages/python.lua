@@ -426,7 +426,13 @@ function M.get_installed_packages(filepath)
 end
 
 -- Install packages
-function M.install_packages(package_list, filepath)
+-- opts.user_intent: set by explicit user commands (:PyworksAdd). Typosquatted
+-- near-miss names are then warned about but still installed (the user typed
+-- them); auto-detected names are blocked outright — content-derived names are
+-- not user intent and are the supply-chain vector.
+function M.install_packages(package_list, filepath, opts)
+	vim.validate({ opts = { opts, "table", true } })
+	opts = opts or {}
 	filepath = filepath or get_current_filepath()
 	if not M.has_venv(filepath) then
 		if not M.create_venv(filepath) then
@@ -436,6 +442,35 @@ function M.install_packages(package_list, filepath)
 
 	if #package_list == 0 then
 		return true
+	end
+
+	-- Typosquat guard (see packages.is_typosquat)
+	local safe, blocked = get_packages().filter_typosquats(package_list)
+	if next(blocked) ~= nil then
+		local details = {}
+		for name, closest in pairs(blocked) do
+			table.insert(details, string.format("'%s' (near known package '%s')", name, closest))
+		end
+		local blocked_msg = table.concat(details, ", ")
+		if opts.user_intent then
+			notifications.notify(
+				string.format("Warning: possible typosquat: %s. Installing as requested.", blocked_msg),
+				vim.log.levels.WARN
+			)
+		else
+			notifications.notify(
+				string.format(
+					"Skipped possible typosquatted package(s): %s. If intentional, install explicitly: :PyworksAdd <name>",
+					blocked_msg
+				),
+				vim.log.levels.WARN,
+				{ action_required = true }
+			)
+			package_list = safe
+			if #package_list == 0 then
+				return false
+			end
+		end
 	end
 
 	-- Get the correct package manager command
@@ -714,7 +749,7 @@ function M.install_python_packages(packages_str)
 		string.format("Installing Python packages: %s", table.concat(pkg_list, ", ")),
 		vim.log.levels.INFO
 	)
-	M.install_packages(pkg_list, filepath)
+	M.install_packages(pkg_list, filepath, { user_intent = true })
 end
 
 -- Uninstall Python packages (user command)

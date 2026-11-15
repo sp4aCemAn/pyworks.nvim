@@ -6,13 +6,12 @@
 -- BufEnter -> invalidate_molten_ns_cache -> Meanwhile: MoltenTick (100ms) ->
 -- remote#define#request -> events loop back -> E132 maxfuncdepth error
 --
--- Solution: Global state tracking with debouncing and Molten tick rate management
+-- Solution: global state tracking with debouncing and per-buffer locking
 
 local M = {}
 
 -- Constants
 local DEFAULT_DEBOUNCE_MS = 500
-local DEFAULT_SAFE_TICK_RATE = 999999
 local DEFAULT_MAX_RECURSION_DEPTH = 3
 
 -- State tracking for reload operations
@@ -20,14 +19,12 @@ local state = {
 	reloading_buffers = {},
 	global_reload_in_progress = false,
 	last_reload_time = 0,
-	original_tick_rate = nil,
 	recursion_depth = 0,
 }
 
 -- Configuration (can be overridden via M.configure())
 local config = {
 	debounce_ms = DEFAULT_DEBOUNCE_MS,
-	safe_tick_rate = DEFAULT_SAFE_TICK_RATE,
 	max_recursion_depth = DEFAULT_MAX_RECURSION_DEPTH,
 }
 
@@ -110,11 +107,13 @@ function M.begin_reload(bufnr)
 		state.reloading_buffers[bufnr] = true
 	end
 
-	-- Slow down Molten tick rate during reload to prevent interference
-	if vim.g.molten_tick_rate then
-		state.original_tick_rate = vim.g.molten_tick_rate
-		vim.g.molten_tick_rate = config.safe_tick_rate
-	end
+	-- NOTE: no Molten tick-rate manipulation here. vim.g.molten_tick_rate is
+	-- read ONCE by Molten at host _initialize and cached (MoltenUpdateOption
+	-- cannot re-create the running timer), so this mechanism was a no-op for
+	-- already-initialized Molten and permanently poisoned tick_rate when
+	-- Molten initialized DURING a reload window. The is_reloading() checks in
+	-- BufWinEnter/BufEnter handlers plus debounce + depth limits are the
+	-- actual E132 protection.
 
 	if vim.g.pyworks_debug then
 		vim.notify(
@@ -142,12 +141,6 @@ function M.end_reload(bufnr)
 	-- Only release global lock when all reloads complete
 	if state.recursion_depth == 0 then
 		state.global_reload_in_progress = false
-
-		-- Restore original Molten tick rate
-		if state.original_tick_rate then
-			vim.g.molten_tick_rate = state.original_tick_rate
-			state.original_tick_rate = nil
-		end
 	end
 
 	if vim.g.pyworks_debug then
@@ -175,11 +168,6 @@ function M.force_reset()
 	state.global_reload_in_progress = false
 	state.recursion_depth = 0
 	state.last_reload_time = 0
-
-	if state.original_tick_rate then
-		vim.g.molten_tick_rate = state.original_tick_rate
-		state.original_tick_rate = nil
-	end
 
 	if vim.g.pyworks_debug then
 		vim.notify("[recursion_guard] Force reset complete", vim.log.levels.DEBUG)

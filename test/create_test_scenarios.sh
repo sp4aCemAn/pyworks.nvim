@@ -5,9 +5,28 @@
 
 echo "🏗️ Creating Pyworks Test Scenarios..."
 
-BASE_DIR="$(dirname "$0")/scenarios"
+# Override with PYWORKS_SCENARIOS_DIR (the container harness generates under
+# /sandbox, OUTSIDE the repo — otherwise the plugin's own pyproject.toml
+# marker leaks into every scenario that has no marker of its own).
+BASE_DIR="${PYWORKS_SCENARIOS_DIR:-$(dirname "$0")/scenarios}"
 rm -rf "$BASE_DIR" 2>/dev/null
 mkdir -p "$BASE_DIR"
+
+# Write a minimal, spec-valid nbformat 4.5 notebook. (Omitting the nbformat
+# field makes jupytext crash with AttributeError, which previously broke all
+# notebook fixtures.) Usage: write_notebook path [source_cell]
+write_notebook() {
+	local path="$1" cell="${2:-}"
+	if [ -n "$cell" ]; then
+		cat >"$path" <<EOF
+{"cells": [{"cell_type": "code", "id": "a1b2c3d4", "metadata": {}, "execution_count": null, "outputs": [], "source": ["$cell"]}], "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"}, "language_info": {"name": "python", "version": "3.12.0"}}, "nbformat": 4, "nbformat_minor": 5}
+EOF
+	else
+		cat >"$path" <<EOF
+{"cells": [], "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"}, "language_info": {"name": "python", "version": "3.12.0"}}, "nbformat": 4, "nbformat_minor": 5}
+EOF
+	fi
+}
 
 # ==============================================================================
 # PYTHON BASIC SCENARIOS
@@ -70,7 +89,7 @@ from django.views import View
 class UserView(View):
     pass
 EOF
-echo '{"cells": [], "metadata": {"kernelspec": {"language": "python"}}}' >"$BASE_DIR/04_django_project/notebooks/analysis/explore.ipynb"
+write_notebook "$BASE_DIR/04_django_project/notebooks/analysis/explore.ipynb"
 
 # 1.5 Flask project
 mkdir -p "$BASE_DIR/05_flask_project/routes"
@@ -207,6 +226,7 @@ echo "🤖 Creating MLOps scenarios..."
 # 1.13 DVC project
 mkdir -p "$BASE_DIR/13_dvc_project/data"
 mkdir -p "$BASE_DIR/13_dvc_project/notebooks/eda"
+mkdir -p "$BASE_DIR/13_dvc_project/src"
 cat >"$BASE_DIR/13_dvc_project/dvc.yaml" <<'EOF'
 stages:
   prepare:
@@ -232,7 +252,7 @@ cat >"$BASE_DIR/13_dvc_project/src/train.py" <<'EOF'
 from sklearn.ensemble import RandomForestClassifier
 print("Training model...")
 EOF
-echo '{"cells": [], "metadata": {"kernelspec": {"language": "python"}}}' >"$BASE_DIR/13_dvc_project/notebooks/eda/explore.ipynb"
+write_notebook "$BASE_DIR/13_dvc_project/notebooks/eda/explore.ipynb"
 
 # 1.14 MLflow project
 mkdir -p "$BASE_DIR/14_mlflow_project/experiments"
@@ -270,7 +290,7 @@ echo "📓 Creating notebook scenarios..."
 
 # 2.1 Standalone notebook
 mkdir -p "$BASE_DIR/21_standalone_notebook"
-echo '{"cells": [{"cell_type": "code", "source": ["print(\"hello\")"]}], "metadata": {"kernelspec": {"language": "python"}}}' >"$BASE_DIR/21_standalone_notebook/analysis.ipynb"
+write_notebook "$BASE_DIR/21_standalone_notebook/analysis.ipynb" 'print(\"hello from fixture\")'
 
 # 2.4 Django with notebooks (deeply nested)
 mkdir -p "$BASE_DIR/24_django_notebooks/backend/apps/analytics/views"
@@ -284,7 +304,7 @@ django==4.2.0
 jupyter==1.0.0
 pandas==2.0.0
 EOF
-echo '{"cells": [], "metadata": {"kernelspec": {"language": "python"}}}' >"$BASE_DIR/24_django_notebooks/research/notebooks/experiments/2024/q1_analysis.ipynb"
+write_notebook "$BASE_DIR/24_django_notebooks/research/notebooks/experiments/2024/q1_analysis.ipynb"
 
 # 2.5 FastAPI with ML notebooks
 mkdir -p "$BASE_DIR/25_fastapi_ml/api/v1/endpoints"
@@ -293,7 +313,7 @@ cat >"$BASE_DIR/25_fastapi_ml/main.py" <<'EOF'
 from fastapi import FastAPI
 app = FastAPI(title="ML API")
 EOF
-echo '{"cells": [], "metadata": {"kernelspec": {"language": "python"}}}' >"$BASE_DIR/25_fastapi_ml/ml/notebooks/training/model_v2.ipynb"
+write_notebook "$BASE_DIR/25_fastapi_ml/ml/notebooks/training/model_v2.ipynb"
 
 # ==============================================================================
 # EDGE CASES

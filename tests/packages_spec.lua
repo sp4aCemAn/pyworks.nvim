@@ -170,4 +170,72 @@ describe("packages", function()
 			assert.is_false(packages.is_custom_package("pandas", "python"))
 		end)
 	end)
+
+	describe("is_typosquat", function()
+		it("flags 1-edit near-misses of known packages", function()
+			assert.are.equal("requests", packages.is_typosquat("reqeusts"))
+			assert.are.equal("numpy", packages.is_typosquat("numpi"))
+			assert.are.equal("matplotlib", packages.is_typosquat("matplotlb"))
+			assert.are.equal("pandas", packages.is_typosquat("pandas2"))
+			assert.are.equal("scikit-learn", packages.is_typosquat("scikit-lern"))
+		end)
+
+		it("flags 2-edit near-misses (transpositions) for longer names", function()
+			assert.are.equal("pandas", packages.is_typosquat("pnadas"))
+			assert.are.equal("tqdm", packages.is_typosquat("tdqm"))
+		end)
+
+		it("uses the stricter 1-edit threshold for short names", function()
+			assert.are.equal("jax", packages.is_typosquat("jaz")) -- 1 edit
+			assert.are.equal("ray", packages.is_typosquat("raxy")) -- 1 edit
+			assert.is_nil(packages.is_typosquat("xyz")) -- >=2 edits from any short known name
+		end)
+
+		it("passes known packages in any spelling", function()
+			assert.is_nil(packages.is_typosquat("numpy"))
+			assert.is_nil(packages.is_typosquat("SciKit-Learn"))
+			assert.is_nil(packages.is_typosquat("opencv_python"))
+			assert.is_nil(packages.is_typosquat("jupytext")) -- real neighbor of jupyter
+			assert.is_nil(packages.is_typosquat("httpie")) -- real neighbor of httpx
+		end)
+
+		it("passes unknown-but-distant names", function()
+			assert.is_nil(packages.is_typosquat("zebrafish"))
+			assert.is_nil(packages.is_typosquat("fork"))
+		end)
+
+		it("strips version specifiers and extras before matching", function()
+			assert.are.equal("numpy", packages.is_typosquat("numpi>=1.24"))
+			assert.is_nil(packages.is_typosquat("numpy[extra]==2.0"))
+		end)
+	end)
+
+	describe("filter_typosquats", function()
+		it("splits safe and blocked names", function()
+			local safe, blocked = packages.filter_typosquats({ "requests", "reqeusts", "pandas", "zebrafish" })
+			assert.are.same({ "requests", "pandas", "zebrafish" }, safe)
+			assert.are.equal("requests", blocked["reqeusts"])
+			assert.is_nil(blocked["requests"])
+		end)
+	end)
+
+	describe("dotted namespace imports", function()
+		it("keeps known multi-segment prefixes instead of confusion-bait roots", function()
+			local temp_file = vim.fn.tempname() .. ".py"
+			vim.fn.writefile({
+				"from google.cloud import storage",
+				"from google.oauth2 import service_account",
+				"import os.path",
+			}, temp_file)
+
+			local imports = packages.scan_imports(temp_file, "python")
+
+			assert.is_true(vim.tbl_contains(imports, "google.cloud"))
+			assert.is_true(vim.tbl_contains(imports, "google.oauth2"))
+			assert.is_false(vim.tbl_contains(imports, "google"))
+			assert.is_true(vim.tbl_contains(imports, "os")) -- stdlib roots unaffected
+
+			vim.fn.delete(temp_file)
+		end)
+	end)
 end)

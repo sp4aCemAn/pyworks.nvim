@@ -4,6 +4,20 @@ This folder contains comprehensive test scenarios for pyworks.nvim's smart detec
 
 ## Quick Start
 
+**Automated (containerized, hermetic — use this):**
+
+```bash
+./test/container.sh build       # once (and when Containerfile changes)
+./test/container.sh unit        # plenary specs
+./test/container.sh scenarios   # the 17 detection scenarios below, automated
+./test/container.sh e2e         # Molten kernel smoke (2 steps red: known upstream bug)
+./test/container.sh shell       # interactive nvim inside the sandbox
+```
+
+Design and findings: `test/ENVIRONMENT_PLAN.md`.
+
+**Manual (host):**
+
 1. **Generate test scenarios:**
    ```bash
    ./create_test_scenarios.sh

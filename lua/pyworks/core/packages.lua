@@ -159,6 +159,268 @@ for lang, mappings in pairs(package_mappings) do
 	end
 end
 
+-- ---------------------------------------------------------------------------
+-- Typosquat detection (supply-chain guard)
+--
+-- Import names lifted from (potentially untrusted) file content fall through
+-- map_import_to_package() verbatim when unmapped. Without this guard, a shared
+-- notebook containing `import reqeusts` or `import numpi` would get squatted
+-- packages auto-installed on one keystroke (<leader>pi), executing attacker
+-- setup.py code in the user's venv.
+--
+-- known_packages is SECURITY-CRITICAL: grow it via PR review when common new
+-- libraries keep getting flagged. A candidate passes if it matches a known
+-- name exactly (after PEP 503 normalization); a near-match (bounded Levenshtein)
+-- is flagged. Homoglyph/unicode lookalikes never reach the distance check:
+-- is_valid_package_name() rejects non-ASCII earlier.
+-- ---------------------------------------------------------------------------
+
+local popular_packages = {
+	"numpy",
+	"pandas",
+	"scipy",
+	"matplotlib",
+	"seaborn",
+	"plotly",
+	"altair",
+	"bokeh",
+	"holoviews",
+	"requests",
+	"urllib3",
+	"httpx",
+	"httpie",
+	"aiohttp",
+	"flask",
+	"django",
+	"fastapi",
+	"starlette",
+	"pydantic",
+	"uvicorn",
+	"gunicorn",
+	"jinja2",
+	"click",
+	"typer",
+	"rich",
+	"tqdm",
+	"python-dotenv",
+	"pyyaml",
+	"toml",
+	"tomli",
+	"attrs",
+	"cattrs",
+	"marshmallow",
+	"tenacity",
+	"apscheduler",
+	"celery",
+	"redis",
+	"pymongo",
+	"psycopg2-binary",
+	"psycopg",
+	"asyncpg",
+	"sqlalchemy",
+	"alembic",
+	"duckdb",
+	"pyarrow",
+	"polars",
+	"dask",
+	"ray",
+	"joblib",
+	"statsmodels",
+	"networkx",
+	"sympy",
+	"numba",
+	"cython",
+	"pytest",
+	"hypothesis",
+	"tox",
+	"coverage",
+	"black",
+	"ruff",
+	"flake8",
+	"pylint",
+	"mypy",
+	"isort",
+	"ipython",
+	"ipykernel",
+	"jupyter",
+	"jupyterlab",
+	"notebook",
+	"nbformat",
+	"jupytext",
+	"transformers",
+	"diffusers",
+	"accelerate",
+	"peft",
+	"trl",
+	"datasets",
+	"tokenizers",
+	"sentence-transformers",
+	"spacy",
+	"nltk",
+	"gensim",
+	"torch",
+	"torchvision",
+	"torchaudio",
+	"tensorflow",
+	"keras",
+	"jax",
+	"flax",
+	"optax",
+	"xgboost",
+	"lightgbm",
+	"catboost",
+	"scikit-image",
+	"opencv-python",
+	"pillow",
+	"imageio",
+	"boto3",
+	"botocore",
+	"paramiko",
+	"fabric",
+	"invoke",
+	"websocket-client",
+	"websockets",
+	"beautifulsoup4",
+	"lxml",
+	"html5lib",
+	"scrapy",
+	"selenium",
+	"playwright",
+	"openai",
+	"anthropic",
+	"cohere",
+	"langchain",
+	"langsmith",
+	"langgraph",
+	"tiktoken",
+	"chromadb",
+	"faiss-cpu",
+	"pinecone-client",
+	"qdrant-client",
+	"weaviate-client",
+	"lancedb",
+	"pymilvus",
+	"streamlit",
+	"gradio",
+	"dash",
+	"uvloop",
+	"trio",
+	"gevent",
+	"greenlet",
+	"protobuf",
+	"grpcio",
+}
+
+-- PEP 503-ish canonicalization: lowercase, collapse [-._]+ runs to a single "-"
+local function normalize_package_name(name)
+	local n = tostring(name):lower()
+	n = n:gsub("[-_.]+", "-")
+	return n
+end
+
+-- Bounded Levenshtein: returns distance if <= max_dist, else max_dist + 1.
+local function edit_distance_at_most(a, b, max_dist)
+	if math.abs(#a - #b) > max_dist then
+		return max_dist + 1
+	end
+	local prev, curr = {}, {}
+	for j = 0, #b do
+		prev[j] = j
+	end
+	for i = 1, #a do
+		curr[0] = i
+		local row_min = curr[0]
+		for j = 1, #b do
+			local cost = a:sub(i, i) == b:sub(j, j) and 0 or 1
+			curr[j] = math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost)
+			if curr[j] < row_min then
+				row_min = curr[j]
+			end
+		end
+		if row_min > max_dist then
+			return max_dist + 1
+		end
+		prev, curr = curr, {}
+	end
+	return prev[#b]
+end
+
+-- normalized name -> canonical display name
+local known_packages = {}
+do
+	for _, pkg_name in pairs(package_mappings.python) do
+		known_packages[normalize_package_name(pkg_name)] = pkg_name
+	end
+	for _, pkg_name in ipairs(popular_packages) do
+		known_packages[normalize_package_name(pkg_name)] = pkg_name
+	end
+end
+
+-- Multi-segment import prefixes known to the mapping table (e.g. google.cloud).
+-- Extracted imports keep the longest known dotted prefix instead of truncating
+-- to the root ("google"), which would dependency-confuse into unrelated packages.
+local dotted_import_prefixes = {}
+do
+	for import_name in pairs(package_mappings.python) do
+		if import_name:find("%.") then
+			dotted_import_prefixes[import_name] = true
+			-- also register shortened prefixes: "google.cloud.storage" -> "google.cloud"
+			for prefix in import_name:gmatch("([%w_]+%.[%w_]+)") do
+				dotted_import_prefixes[prefix] = true
+			end
+		end
+	end
+end
+
+-- Check whether a candidate package name is a near-match (possible typosquat)
+-- of a known popular package.
+-- Returns closest_canonical_name, distance when suspicious; nil when safe.
+-- Safe by construction: exact known names (any case/separator spelling), names
+-- too short/long to plausibly squat, and names farther than the threshold.
+function M.is_typosquat(package_name)
+	vim.validate({ package_name = { package_name, "string" } })
+
+	-- Strip extras and version specifiers: "numpy>=1.24[extra]" -> "numpy"
+	local base = package_name:match("^[%w_%-%.]+")
+	if not base or base == "" then
+		return nil
+	end
+	local norm = normalize_package_name(base)
+	if known_packages[norm] then
+		return nil
+	end
+
+	-- Threshold: 1 edit for tiny names, 2 otherwise
+	local max_dist = #norm <= 3 and 1 or 2
+	local best_name, best_dist = nil, max_dist + 1
+	for known_norm, canonical in pairs(known_packages) do
+		local d =
+			edit_distance_at_most(norm, known_norm, best_dist - 1 < 1 and max_dist or math.min(max_dist, best_dist - 1))
+		if d <= max_dist and d < best_dist then
+			best_dist, best_name = d, canonical
+		end
+	end
+	if best_name then
+		return best_name, best_dist
+	end
+	return nil
+end
+
+-- Split a candidate list into (safe list, blocked map name->closest).
+function M.filter_typosquats(packages)
+	vim.validate({ packages = { packages, "table" } })
+	local safe, blocked = {}, {}
+	for _, pkg in ipairs(packages) do
+		local closest = M.is_typosquat(pkg)
+		if closest then
+			blocked[pkg] = closest
+		else
+			table.insert(safe, pkg)
+		end
+	end
+	return safe, blocked
+end
+
 -- Python standard library modules (defined at module level for performance)
 -- Updated for Python 3.9+ (includes modules added in 3.9, 3.10, 3.11)
 local python_stdlib = {
@@ -355,6 +617,21 @@ local function extract_python_imports(content)
 	-- Helper to add import root package
 	local function add_import(pkg)
 		if pkg and pkg ~= "" then
+			-- Known multi-segment imports keep their dotted prefix so mapping
+			-- can resolve them ("google.cloud.storage" -> google.cloud ->
+			-- google-cloud-storage) instead of installing confusion-bait roots
+			-- like bare "google".
+			if pkg:find("%.") then
+				if dotted_import_prefixes[pkg] then
+					imports[pkg] = true
+					return
+				end
+				local two = pkg:match("^([%w_]+%.[%w_]+)")
+				if two and dotted_import_prefixes[two] then
+					imports[two] = true
+					return
+				end
+			end
 			-- Take only the root package (before first dot)
 			local root = pkg:match("^([%w_]+)")
 			if root then

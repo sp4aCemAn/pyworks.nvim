@@ -4,6 +4,49 @@ All notable changes to pyworks.nvim will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Typosquat guard for package installs** (security): auto-detected import
+  names — derived from (potentially untrusted) file content — are now checked
+  against a curated set of known packages using PEP 503 normalization plus
+  bounded Levenshtein distance (`packages.is_typosquat`,
+  `packages.filter_typosquats`). Near-miss names (`reqeusts`, `numpi`,
+  `tdqm`, …) are **blocked** from every programmatic install path
+  (`<leader>pi`, `:PyworksSync`) with a notification naming the closest known
+  package; the manually typed `:PyworksAdd` warns but proceeds (explicit user
+  intent is the escape hatch). The curated list is security-critical — see
+  `AGENTS.md`.
+- **Namespace import fidelity**: `from google.cloud import storage` now maps
+  via the multi-segment import table (`google.cloud` → `google-cloud-storage`)
+  instead of installing the unrelated root package `google`
+  (dependency-confusion vector).
+- **`AGENTS.md`**: single source of truth for contributor/agent guidance —
+  commands, enforced code style, architecture map, gotchas, and the list of
+  known open bugs flagged in the 2026-11 code review.
+- **Containerized test environment** (`test/`): Docker/podman image
+  (`test/docker/Containerfile`), one-shot wrapper (`test/container.sh
+  build|warm|unit|scenarios|e2e|shell|clean`), automated scenario suite with
+  notification capture (`test/env/run_scenarios.lua`, 17 scenarios), and an
+  Molten kernel e2e smoke test (`test/env/e2e_smoke.lua`). Everything runs in
+  a repo-local sandbox (`test/.sandbox/`, gitignored); the host's real nvim,
+  Python, and Jupyter state are never touched. Design + findings:
+  `test/ENVIRONMENT_PLAN.md`.
+
+### Fixed
+
+- **`recursion_guard` could permanently stall Molten's update loop**:
+  `begin_reload()` raised `vim.g.molten_tick_rate` to the safe value but
+  `end_reload()` only restored it when an original had been captured;
+  worse, when Molten initialized *during* a reload window the inflated rate
+  was cached by Molten for the lifetime of the host, leaving cells stuck at
+  `* On Hold` forever. The tick-rate manipulation was a no-op for
+  already-initialized Molten and a time bomb otherwise — removed entirely;
+  `is_reloading()` guards, debounce, and the depth limit remain the actual
+  E132 protection. Regression tests added.
+- **Scenario fixtures**: `13_dvc_project` now creates its `src/` directory;
+  all `.ipynb` fixtures are valid nbformat-4.5 documents (missing `nbformat`
+  fields crashed jupytext with `AttributeError`).
+
 ## [0.3.0] - 2026-05-22
 
 ### Added
