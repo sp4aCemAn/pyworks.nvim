@@ -54,9 +54,12 @@ file saved/opened
    homoglyphs. `validate_package_names` (line 889) splits valid/invalid.
 2. `is_typosquat` (line 380) / `filter_typosquats` (line 410):
    `normalize_package_name` (line 315, PEP-503-ish: lower, collapse
-   `[-._]+`→`-`) + `edit_distance_at_most` (line 322, bounded Levenshtein).
-   Threshold: 2 edits (1 for ≤3-char names). Exact known name in any
-   spelling → safe. Version specifiers/extras stripped before matching
+   `[-._]+`→`-`), then three rules in order: (1) exact known name in any
+   spelling → safe; (2) **prefix-squat** — candidate (≥5 chars) that is a
+   proper prefix of a known package is flagged with the closest/shortest
+   such name (`scikit`→`scikit-learn`, `panda`→`pandas`); (3) bounded
+   Levenshtein via `edit_distance_at_most` (line 322): ≤2 edits (≤3-char
+   names: 1). Version specifiers/extras stripped before matching
    (`numpy[extra]>=2` → base `numpy`).
 
 ## Enforcement points (python.lua:433 install_packages)

@@ -11,7 +11,8 @@ All notable changes to pyworks.nvim will be documented in this file.
   against a curated set of known packages using PEP 503 normalization plus
   bounded Levenshtein distance (`packages.is_typosquat`,
   `packages.filter_typosquats`). Near-miss names (`reqeusts`, `numpi`,
-  `tdqm`, …) are **blocked** from every programmatic install path
+  `tdqm`) and prefix squats (`scikit`, `panda`, `matplot` — flagged at any
+  edit distance by the prefix rule) are **blocked** from every programmatic install path
   (`<leader>pi`, `:PyworksSync`) with a notification naming the closest known
   package; the manually typed `:PyworksAdd` warns but proceeds (explicit user
   intent is the escape hatch). The curated list is security-critical — see

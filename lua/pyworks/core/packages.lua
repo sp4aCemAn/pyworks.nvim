@@ -390,6 +390,25 @@ function M.is_typosquat(package_name)
 		return nil
 	end
 
+	-- Prefix-squat rule: "scikit" (of scikit-learn), "panda" (of pandas),
+	-- "matplot" (of matplotlib) are classic squat registrations and are too
+	-- far in edit distance for the threshold below. Candidates that are a
+	-- proper prefix of a known package (>=5 chars) are flagged; closest =
+	-- shortest such known name.
+	if #norm >= 5 then
+		local best_name, best_len = nil, nil
+		for known_norm, canonical in pairs(known_packages) do
+			if #known_norm > #norm and known_norm:sub(1, #norm) == norm then
+				if not best_len or #known_norm < best_len then
+					best_len, best_name = #known_norm, canonical
+				end
+			end
+		end
+		if best_name then
+			return best_name, best_len - #norm
+		end
+	end
+
 	-- Threshold: 1 edit for tiny names, 2 otherwise
 	local max_dist = #norm <= 3 and 1 or 2
 	local best_name, best_dist = nil, max_dist + 1

@@ -204,6 +204,24 @@ describe("packages", function()
 			assert.is_nil(packages.is_typosquat("fork"))
 		end)
 
+		it("flags prefix-squats of known packages regardless of edit distance", function()
+			-- "scikit" ties between scikit-learn/scikit-image (same length),
+			-- so accept either canonical match
+			assert.is_true(
+				packages.is_typosquat("scikit") == "scikit-learn" or packages.is_typosquat("scikit") == "scikit-image"
+			)
+			assert.are.equal("pandas", packages.is_typosquat("panda"))
+			assert.are.equal("matplotlib", packages.is_typosquat("matplot"))
+			assert.are.equal("torchvision", packages.is_typosquat("torchvisio"))
+		end)
+
+		it("does not prefix-flag known packages or short candidates", function()
+			assert.is_nil(packages.is_typosquat("jupyter")) -- known, though prefix of jupyterlab
+			assert.is_nil(packages.is_typosquat("vex")) -- ≥2 edits from any short known name (tox/jax/ray)
+			assert.are.equal("flask", packages.is_typosquat("fast")) -- 1 edit, correctly caught
+			assert.is_nil(packages.is_typosquat("dask")) -- known
+		end)
+
 		it("strips version specifiers and extras before matching", function()
 			assert.are.equal("numpy", packages.is_typosquat("numpi>=1.24"))
 			assert.is_nil(packages.is_typosquat("numpy[extra]==2.0"))
