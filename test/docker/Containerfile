@@ -47,6 +47,13 @@ RUN set -eux; \
 COPY entrypoint.sh /usr/local/bin/pyworks-entrypoint
 RUN chmod +x /usr/local/bin/pyworks-entrypoint
 
+# Non-root runtime user. The base image's `ubuntu` user (uid 1000) is reused.
+# container.sh overrides with the host's uid:gid so bind-mount writes stay
+# owned by the real user; nothing ever runs as root. HOME points into the
+# sandbox so arbitrary uids still have a writable dotfile home.
 WORKDIR /work/pyworks.nvim
+
+USER 1000:1000
+ENV HOME=/sandbox/home
 
 ENTRYPOINT ["/usr/local/bin/pyworks-entrypoint"]

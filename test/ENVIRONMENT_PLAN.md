@@ -174,3 +174,31 @@ Implemented as designed: `test/docker/Containerfile`, `test/docker/entrypoint.sh
   churn); revisit with the upstream stream bug.
 - `pyzmq<27`: declared after the jupyter_client thread-delivery change; the
   stream bug persists regardless — kept as the conservative pin.
+
+## Security posture (hardened 2026-11-15)
+
+Every scenario run opens untrusted fixture files, and `pip`/`uv` installs
+plus Jupyter kernel code execution mean *arbitrary third-party code runs in
+the container by design*. Posture:
+
+| Threat | Control | Verified |
+|---|---|---|
+| Container escapes to host files | Repo bind-mounted **read-only**; only `test/.sandbox/` is writable | `echo > /work/...` → `Read-only file system` ✓ |
+| Tamper with git state (escalation to host execution via hooks/config) | `.git` also read-only | `git config user.email evil` → `could not lock .git/config: Read-only` ✓ |
+| Root-uid code execution in container | `--user $(id -u):$(id -g)` + `USER 1000` default; nothing runs as root | `id` → `uid=501` ✓ |
+| Privilege escalation | `--cap-drop ALL` + `--security-opt no-new-privileges` | ✓ (all commands) |
+| Data exfiltration during tests | `unit`/`scenarios`/`e2e` join an `--internal` network: no egress, loopback intact for kernel zmq | `curl pypi.org` → blocked; `127.0.0.1` socket pair → works ✓ |
+| Host config pollution | XDG/JUPYTER/HOME/uv-cache all under `/sandbox`; host `$HOME` never mounted | audit of mounts ✓ |
+
+Rules that follow from this:
+- **Run `warm` before test commands on a cold sandbox** — bootstrap needs
+  egress (git clones, package downloads); test networks deliberately can't
+  fetch anything. `uv` installs in the e2e fixture run `--offline` against
+  the seeded cache.
+- Tests may not write inside the repo (they already don't: specs use
+  `vim.fn.tempname()` + `TMPDIR`, scenarios write to `/sandbox`). Lazy's
+  helptag generation is disabled in `test/env/init.lua` so it can't try.
+- Postmortem (2026-11-15): repo audited for tampering from the earlier
+  root+rw posture — git config/hooks/remotes clean, zero stray files, zero
+  root-owned files, doc/tags unchanged. No incident found; hardening is
+  prophylactic.

@@ -70,4 +70,6 @@ require("lazy").setup({
 	checker = { enabled = false },
 	rocks = { enabled = false },
 	git = { timeout = 120 },
+	-- repo is mounted read-only: no helptag generation into /work/doc
+	docs = { enabled = false },
 })

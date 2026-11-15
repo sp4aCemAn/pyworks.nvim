@@ -8,13 +8,18 @@ This folder contains comprehensive test scenarios for pyworks.nvim's smart detec
 
 ```bash
 ./test/container.sh build       # once (and when Containerfile changes)
+./test/container.sh warm        # REQUIRED after build/clean — the only
+                                # network-privileged step (seeds everything)
 ./test/container.sh unit        # plenary specs
 ./test/container.sh scenarios   # the 17 detection scenarios below, automated
 ./test/container.sh e2e         # Molten kernel smoke (2 steps red: known upstream bug)
 ./test/container.sh shell       # interactive nvim inside the sandbox
 ```
 
-Design and findings: `test/ENVIRONMENT_PLAN.md`.
+Security posture: test containers run as your host user (never root),
+with the repo mounted read-only and no network egress — warm is the only
+step that reaches the internet. Design, findings, and the cold-start rule:
+`test/ENVIRONMENT_PLAN.md`.
 
 **Manual (host):**
 

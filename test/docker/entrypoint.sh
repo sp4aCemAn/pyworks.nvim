@@ -21,6 +21,9 @@ export JUPYTER_DATA_DIR="$SANDBOX/jupyter"
 # falls back to it, which would leak the sandbox venv into tests that
 # assert "empty dir -> no venv".
 export PYWORKS_HOST_PYTHON="$VENV/bin/python"
+# Arbitrary-uid runs have no passwd home; keep all dotfiles in the sandbox.
+export HOME="$SANDBOX/home"
+export UV_CACHE_DIR="$SANDBOX/uv-cache"
 
 # ipykernel<7: Molten 1.9.2 raises KeyError on ipykernel 7 messages
 # (execute_input lost the "wait" field), which strands every cell in
@@ -31,7 +34,7 @@ export PYWORKS_HOST_PYTHON="$VENV/bin/python"
 PKGS=(pynvim "ipykernel<7" "pyzmq<27" jupyter_client jupytext numpy pandas matplotlib)
 
 mkdir -p "$NVIM_CONFIG" "$NVIM_DATA" "$SANDBOX/xdg/state" "$SANDBOX/xdg/cache" \
-	"$SANDBOX/jupyter" "$SANDBOX/results" "$SANDBOX/e2e"
+	"$SANDBOX/jupyter" "$SANDBOX/results" "$SANDBOX/e2e" "$SANDBOX/home" "$SANDBOX/uv-cache"
 
 # Molten writes kernel connection files to $JUPYTER_DATA_DIR/runtime and
 # does NOT create the dir; real setups get it as a side effect of prior
