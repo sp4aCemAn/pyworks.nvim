@@ -68,6 +68,10 @@ lua/pyworks/init.lua      setup(), config validation/merge, user commands
   utils.lua               project root/paths, system wrappers, safe IO
 ```
 
+Deep per-flow documentation with `file:line` anchors, invariants, and test
+mapping: **`docs/internals/`** (start at `docs/internals/README.md`). Update
+the matching flow doc when you change a flow.
+
 Dependency flow: `plugin/ → core/detector → languages/python → core/*`.
 `languages/python.lua` ↔ `core/packages.lua` is a cycle, deliberately broken
 by the lazy `get_packages()` require inside functions — preserve that
@@ -143,14 +147,22 @@ own tests, not drive-by edits:
   `keymaps.lua`); follow that convention instead of re-exporting publicly.
 - Containerized test env (built): `./test/container.sh
   unit|scenarios|e2e|shell` — Docker on macOS, podman via `CONTAINER_RT`.
+  Security posture: non-root, repo mounted READ-ONLY, internal-only network
+  for test runs (see `test/ENVIRONMENT_PLAN.md`); run `warm` before tests
+  on a cold sandbox since bootstrap needs egress.
   Scenario fixtures: `test/create_test_scenarios.sh` (auto-run inside the
   container; `PYWORKS_SCENARIOS_DIR` overrides location — keep scenarios
   OUTSIDE the repo so the plugin's own markers don't leak into detection).
 
 ## Repo hygiene
 
-- `test/scenarios/`, `notes/`, `docs/`, `.claude/` are gitignored; don't
-  add build artifacts or generated `doc/tags` churn to commits.
+- `test/scenarios/`, `notes/`, `.claude/` are gitignored; don't add build
+  artifacts or generated `doc/tags` churn to commits.
+- `docs/` is tracked and holds human/AI-facing docs: `docs/LMS.md` is the
+  session-memory file — READ IT FIRST when starting a fresh context chat,
+  and UPDATE ITS STATE SECTION before ending one that changed anything.
+- `doc/` (singular) is the Vim help tree loaded by `:help pyworks`; keep it
+  tracked and regenerate tags with `:helptags doc/` when topics change.
 - Changelog is Keep-a-Changelog format with a migration note per breaking
   change; add an entry under `[Unreleased]` for every user-visible change.
 - This repo previously referenced a `CLAUDE.md` in commit messages — it was

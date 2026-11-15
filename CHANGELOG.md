@@ -23,6 +23,12 @@ All notable changes to pyworks.nvim will be documented in this file.
 - **`AGENTS.md`**: single source of truth for contributor/agent guidance —
   commands, enforced code style, architecture map, gotchas, and the list of
   known open bugs flagged in the 2026-11 code review.
+- **Containerized test environment security posture**: test containers run
+  as the host user (never root), with all capabilities dropped,
+  `no-new-privileges`, the repository bind-mounted read-only (a compromised
+  fixture/package cannot tamper with plugin source or `.git`), and an
+  `--internal` Docker network for `unit`/`scenarios`/`e2e` so running
+  untrusted code has no egress while kernel loopback still works.
 - **Containerized test environment** (`test/`): Docker/podman image
   (`test/docker/Containerfile`), one-shot wrapper (`test/container.sh
   build|warm|unit|scenarios|e2e|shell|clean`), automated scenario suite with
@@ -32,8 +38,30 @@ All notable changes to pyworks.nvim will be documented in this file.
   Python, and Jupyter state are never touched. Design + findings:
   `test/ENVIRONMENT_PLAN.md`.
 
+### Documentation
+
+- **`docs/internals/` — flow-based architecture docs for AI agents**:
+  startup, detection, environment, packages, notebooks, execution, and
+  infrastructure deep-dives, each with `file:line` anchors into the Lua
+  sources, per-flow invariants, and which test suites cover them; plus an
+  onboarding map (`docs/internals/README.md`). Update the matching flow doc
+  alongside behavior changes (protocol now in AGENTS.md + LMS etiquette).
+- **`docs/` restructured as the documentation hub** (now tracked): flat-file
+  layout with `docs/LMS.md` — the language-model session memory (state,
+  dated decisions, active threads) that new AI context chats should read
+  first and update before ending a session — plus `docs/README.md` as the
+  index.
+- **Vim help synced**: `doc/tags` was stale (10 missing entries); regenerated
+  via `:helptags`. `:PyworksDebugExtmarks` is now documented (it existed but
+  was missing from `:help pyworks`).
+- **Cold-start rule documented** in `test/README.md`, `container.sh --help`,
+  and `test/ENVIRONMENT_PLAN.md`: run `warm` before `unit`/`scenarios`/`e2e`
+  on a cold sandbox — test runs have no network egress by design.
+
 ### Fixed
 
+- **Stale command name in install-error report**: referenced
+  `:PyworksListPython` (does not exist); now `:PyworksList`.
 - **`recursion_guard` could permanently stall Molten's update loop**:
   `begin_reload()` raised `vim.g.molten_tick_rate` to the safe value but
   `end_reload()` only restored it when an original had been captured;

@@ -591,7 +591,7 @@ function M.install_packages(package_list, filepath, opts)
 				error_report[#error_report + 1] = "2. Check Python version compatibility"
 				error_report[#error_report + 1] =
 					"3. For UV: Consider using 'uv pip install --no-deps' for problematic packages"
-				error_report[#error_report + 1] = "4. Use :PyworksListPython to see currently installed packages"
+				error_report[#error_report + 1] = "4. Use :PyworksList to see currently installed packages"
 				error_report[#error_report + 1] = ""
 				error_report[#error_report + 1] = "Press 'q' to close this buffer"
 

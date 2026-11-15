@@ -201,6 +201,10 @@ ENVIRONMENT MANAGEMENT~
     Reset the notebook reload guard (emergency recovery)
     Use if notebooks won't reload or you see E132 errors
 
+*:PyworksDebugExtmarks*
+    Dump all extmarks with virtual text (diagnoses cell-completion
+    detection when outputs seem to never finish)
+
 CELL OPERATIONS~
 
 *:PyworksNextCell*
