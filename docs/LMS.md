@@ -17,15 +17,20 @@ Neovim ≥ 0.10. Entry points: `plugin/pyworks.lua` (autocmds) and
 
 ## Current state (2026-11-16)
 
-- Branch `lspcleanup` (from `3dfd75c`): notebook LSP/markdown work, landed
-  as slices S1–S7 (see CHANGELOG [Unreleased]): `notebooks.lsp`
-  silence/detach/attach (default **silence** — behavior change), markdown
-  cell highlighting (`markdown_highlight`, default on),
-  `:PyworksFormatMarkdownCell` + `<leader>jfm` (`md_formatter` argv,
-  default pandoc). Host suite green (~310 tests), stylua clean. Also on
-  branch: packages_spec typosquat **tie-tolerance** test fixes ("fast" ties
-  at 2 edits with flask/dash/dask — hash order picked the canonical).
-  Not pushed yet; no PR opened.
+- Branch `lspcleanup` (from `3dfd75c`), PUSHED, PR not yet opened: notebook
+  LSP/markdown work landed as slices S1–S9 (see CHANGELOG [Unreleased]):
+  `notebooks.lsp` silence/detach/attach (default **silence** — behavior
+  change), `:PyworksFormatMarkdownCell` + `<leader>jfm` (`md_formatter`
+  argv), S8 running-client wrap, S9 `ctx.bufnr=nil` URI-fallback fix
+  (real-world pylsp leak, reproduced + verified end-to-end with the user's
+  config). Host suite green (~315), stylua clean. packages_spec typosquat
+  tie-tolerance test fixes also on branch (see thread #5).
+- **Md UX re-evaluated after S9**: investigation proved jupytext 1.19
+  percent CANONICALLY comments markdown cells and `pythonComment` makes
+  the S5 syntax-region highlighter dead on real buffers. Outcome: S10–S12
+  restructuring into the **Model A foundation refactor (F1–F6)** — full
+  brief, verified facts, and acceptance criteria:
+  **`docs/UX_MODEL_A_REFACTOR.md`**. Next session: execute F1.
 - HEAD `e09e27e` era: code review outcomes, typosquat guard,
   recursion_guard fix, container test env.
 - Test suite (containerized): `unit` ALL GREEN (~290 tests),
@@ -36,16 +41,23 @@ Neovim ≥ 0.10. Entry points: `plugin/pyworks.lua` (autocmds) and
 
 ## Decisions (dated, with rationale pointers)
 
+- **2026-11-16** — **Model A "Folded Notebook" adopted** after S5/S9
+  investigation proved jupytext percent CANONICALLY comments markdown cells
+  and `pythonComment` makes syntax-region md highlighting dead on real
+  buffers. Doctrine: percent script IS the buffer; notebook feel from
+  presentation chrome (folds, matchadd concealment, virt text); **single
+  buffer** (no scratch/split editors); md UX = inline concealment. The S10–
+  S12 patches restructured into the **F1–F6 foundation refactor** — brief,
+  verified facts, acceptance criteria, slice checklist:
+  **`docs/UX_MODEL_A_REFACTOR.md`**. markdown_hl.lua (S5) is superseded;
+  F5 removes it. Next session executes F1.
 - **2026-11-16** — `notebooks.lsp` default = `"silence"`: filter
   publishDiagnostics inside markdown regions rather than detach; keeps
   completion, kills the cascade. Region = content lines only (markers stay
   python). Detach implemented via LspAttach + `client:detach_buffer`
   (0.11) / `vim.lsp.buf_detach_client` (0.10). Flow doc:
-  `docs/internals/notebooks.md` ("LSP & markdown ergonomics").
-- **2026-11-16** — Markdown highlighting via vim-syntax region +
-  `$VIMRUNTIME/syntax/markdown.vim`, NOT treesitter injection (python TS
-  parser can't reliably scope raw md). markview.nvim documented as the
-  richer TS-path alternative.
+  `docs/internals/notebooks.md` ("LSP & markdown ergonomics"). NOTE: the
+  region source migrates to the cell model in F1/F4.
 
 - **2026-11-14** — Full code review graded the repo B; findings drove the
   subsequent work. Report was chat-only; key items are in AGENTS.md's
@@ -91,10 +103,16 @@ Neovim ≥ 0.10. Entry points: `plugin/pyworks.lua` (autocmds) and
 5. (2026-11-16, from this branch's test fixes) `is_typosquat` resolves
    equal-distance ties by `pairs()` iteration order — nondeterministic
    canonical across processes. Tests now tie-tolerant; real fix = stable
-   tie-break (e.g. lexicographic) + determinism test. Also: new review
-   findings NOT yet in AGENTS known-bugs: run-all `"bnW"` off-by-one
-   (double-executes cells), installed-packages invalidate key mismatch,
-   `validate_package_names` absent from the live exec path.
+   tie-break (e.g. lexicographic) + determinism test.
+6. **F1–F6 foundation refactor** (the active work): Model A presentation
+   layer — cell model, percent_md codec, consumer migration (fixes run-all
+   `"bnW"` off-by-one / double-execution as F3), formatter comment round-
+   trip, remove dead markdown_hl, inline md concealment spike+build.
+   Full brief + checklist: `docs/UX_MODEL_A_REFACTOR.md`. Next action:
+   execute F1.
+7. Two remaining 2026-11 review findings still not in AGENTS known-bugs:
+   installed-packages `invalidate` key mismatch; `validate_package_names`
+   absent from the live exec path. Flag-only; each needs own change+tests.
 
 ## Where things live
 
@@ -103,6 +121,7 @@ Neovim ≥ 0.10. Entry points: `plugin/pyworks.lua` (autocmds) and
 | Commands/style/architecture for agents | `AGENTS.md`                                                     |
 | Run the tests                          | `./test/container.sh --help`, `test/README.md`                  |
 | Why the env looks like this + findings | `test/ENVIRONMENT_PLAN.md`                                      |
+| Model A refactor brief + F1–F6 checklist | `docs/UX_MODEL_A_REFACTOR.md`                                 |
 | Vim help (user-facing)                 | `doc/pyworks.txt` (`:help pyworks`)                             |
 | User-visible change notes              | `CHANGELOG.md` under `[Unreleased]`                             |
 | Scenario fixtures                      | `test/create_test_scenarios.sh` (auto-regenerated in-container) |
