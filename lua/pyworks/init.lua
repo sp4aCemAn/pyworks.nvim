@@ -288,6 +288,9 @@ function M.setup(opts)
 	local cell_engine = require("pyworks.core.cell_engine")
 	cell_engine.configure({ cell_marker = config.cell_marker })
 
+	-- Notebook-aware LSP diagnostics handling ("silence"/"attach")
+	require("pyworks.notebook.lsp").install()
+
 	-- Initialize state (load persistent data, then start session)
 	local state = require("pyworks.core.state")
 	state.init()

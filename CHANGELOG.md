@@ -6,6 +6,20 @@ All notable changes to pyworks.nvim will be documented in this file.
 
 ### Added
 
+- **Notebook LSP diagnostics silencing** (`notebooks.lsp`, default
+  `"silence"`): jupytext percent scripts store markdown cell bodies as raw
+  text, so Python servers (pylsp, pyright) reported syntax errors on those
+  lines and cascading bogus scope warnings across code cells. `pyworks` now
+  wraps `textDocument/publishDiagnostics` and drops diagnostics pointing
+  inside `# %% [markdown]` regions of notebook buffers only. Modes:
+  `"silence"` (filter, keep completion), `"detach"` (full detach — S4),
+  `"attach"` (status quo). Non-notebook buffers and payloads outside
+  markdown regions are forwarded untouched.
+- **`notebooks` config section**: `notebooks.lsp` (above) and
+  `notebooks.md_formatter` (argv array, default pandoc, used to format
+  markdown cell content). Invalid values warn without crashing.
+  Lists use replace semantics on merge (no `tbl_deep_extend` index-merge
+  tail leak).
 - **Typosquat guard for package installs** (security): auto-detected import
   names — derived from (potentially untrusted) file content — are now checked
   against a curated set of known packages using PEP 503 normalization plus
