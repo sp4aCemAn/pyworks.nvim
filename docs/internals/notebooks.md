@@ -70,16 +70,18 @@ installed later in-session, poll marker every 1s × 30 (VENV_CHECK_*, line 14).
 
 ## LSP & markdown ergonomics in notebook buffers (2026-11)
 
-Percent buffers are `filetype=python` with raw markdown bodies, which broke
-both the python LSP and markdown rendering. Three modules now close that:
+Canonical jupytext percent COMMENTS markdown bodies (valid Python), but raw
+lines typed mid-session — or non-canonical percent files — break both the
+python LSP and markdown rendering. Three modules now close that (F4 wires
+them to the canonical cell model / percent_md codec):
 
 - **`notebook/lsp.lua`** — `install()` (from `setup()`, init.lua:299) wraps
   `vim.lsp.handlers["textDocument/publishDiagnostics"]`; for notebook
   buffers (identified by `b:pyworks_notebook_path`, fallback `%.ipynb$`
   buffer name) in mode `"silence"` it drops diagnostics whose start line
-  falls in a markdown region (`cell_engine.get_markdown_regions`,
-  cell_engine.lua:66 — a shim delegating to the canonical cell model,
-  `core/cell_model.lua:148` `markdown_regions`) and forwards everything
+  falls in a markdown region (`core/cell_model.lua` `markdown_regions` —
+  the canonical model since F4; `cell_engine.get_markdown_regions` remains
+  as a delegating shim) and forwards everything
   else to the saved original handler. Payloads are shallow-copied only when
   something is dropped.
   Handler wrapping is idempotent via a weak-key registry (`wrapped_handlers`
@@ -105,10 +107,14 @@ both the python LSP and markdown rendering. Three modules now close that:
   No-ops when `vim.g.syntax_on ~= 1` or `markdown_highlight = false`.
 - **`commands/format_cell.lua`** — `:PyworksFormatMarkdownCell` /
   `<leader>jfm` (keymaps.lua tail): region via
-  `_find_enclosing_md_region` (marker line counts as inside; code/empty →
-  refuse), content piped async through `notebooks.md_formatter`
-  (`utils.async_system_call` gained `stdin` passthrough, utils.lua:269),
-  buffer rewritten only on exit 0.
+  `_find_enclosing_md_region` (now a `cell_model.cell_at` call-through, F4 —
+  marker line counts as inside; code/preamble/empty → refuse). Canonical
+  md content is **uncommented** (`notebook/percent_md.lua`) before being
+  piped async through `notebooks.md_formatter` and **re-commented** before
+  the content range is rewritten (`utils.async_system_call` gained `stdin`
+  passthrough, utils.lua:269; buffer touched only on exit 0). Skipping the
+  comment/uncomment step would feed pandoc `# text` as an H1 and drop raw
+  Python lines back into the buffer ("h1 soup").
 
 Config: `notebooks = { lsp, markdown_highlight, md_formatter }`
 (init.lua:63); `md_formatter` uses replace semantics on merge

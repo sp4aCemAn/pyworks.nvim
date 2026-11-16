@@ -4,11 +4,18 @@
 -- the *content* of the markdown cell under the cursor (marker lines are
 -- left untouched — jupytext owns those) and replaces the region with the
 -- formatter's stdout. Async; the buffer is only touched on exit code 0.
+--
+-- Model A round-trip (F4): canonical percent buffers store markdown content
+-- COMMENTED ("# text"), so the formatter receives the uncommented real
+-- markdown (percent_md.uncomment) and its output is re-commented before
+-- replacement — without that codec step a formatter sees "# text" as an H1
+-- heading and every pass corrupts the cell ("h1 soup").
 
 local M = {}
 
-local cell_engine = require("pyworks.core.cell_engine")
+local cell_model = require("pyworks.core.cell_model")
 local notifications = require("pyworks.core.notifications")
+local percent_md = require("pyworks.notebook.percent_md")
 local utils = require("pyworks.utils")
 
 local function get_formatter()
@@ -21,28 +28,19 @@ local function get_formatter()
 	return cmd
 end
 
--- Markdown cell containing the cursor (marker line counts as inside).
--- Content region: marker_line+1 .. next_marker-1 (or EOF). nil when the
--- cursor is outside any cell or inside a code cell.
+-- Markdown cell containing the cursor (marker line counts as inside, per
+-- cell_model.cell_at). Content region = cell start_line .. end_line. nil
+-- when the cursor is outside any cell, in the preamble, in an empty cell,
+-- or in a non-markdown cell.
 local function find_enclosing_md_region(bufnr, cursor_line)
-	local positions = cell_engine.get_cell_positions(bufnr)
-	local line_count = vim.api.nvim_buf_line_count(bufnr)
-	for idx, marker_line in ipairs(positions) do
-		local boundary = positions[idx + 1] or (line_count + 1)
-		if cursor_line >= marker_line and cursor_line < boundary then
-			local marker_text = vim.api.nvim_buf_get_lines(bufnr, marker_line - 1, marker_line, false)[1] or ""
-			if not marker_text:match("%[markdown%]") then
-				return nil
-			end
-			local start_line = marker_line + 1
-			local end_line = boundary - 1
-			if start_line > end_line then
-				return nil
-			end
-			return { start_line = start_line, end_line = end_line }
-		end
+	local cell = cell_model.cell_at(bufnr, cursor_line)
+	if not cell or cell.marker_line == 0 or cell.type ~= "markdown" then
+		return nil
 	end
-	return nil
+	if cell.start_line > cell.end_line then
+		return nil
+	end
+	return { start_line = cell.start_line, end_line = cell.end_line }
 end
 
 function M.format_current_cell(callback)
@@ -76,7 +74,7 @@ function M.format_current_cell(callback)
 	end
 
 	local lines = vim.api.nvim_buf_get_lines(bufnr, region.start_line - 1, region.end_line, false)
-	local content = table.concat(lines, "\n") .. "\n"
+	local content = table.concat(percent_md.uncomment(lines), "\n") .. "\n"
 
 	local ok_start, _ = utils.async_system_call(formatter, function(success, stdout, stderr)
 		if not success then
@@ -98,7 +96,7 @@ function M.format_current_cell(callback)
 			return
 		end
 
-		vim.api.nvim_buf_set_lines(bufnr, region.start_line - 1, region.end_line, false, new_lines)
+		vim.api.nvim_buf_set_lines(bufnr, region.start_line - 1, region.end_line, false, percent_md.comment(new_lines))
 		notifications.notify("Markdown cell formatted", vim.log.levels.INFO)
 		if callback then
 			callback(true)

@@ -93,6 +93,15 @@ All notable changes to pyworks.nvim will be documented in this file.
 
 ### Fixed
 
+- **Markdown cell formatter mangled canonical notebooks (`:PyworksFormatMarkdownCell` /
+  `<leader>jfm`)**: jupytext percent stores markdown cell content commented
+  (`# text`), but the formatter previously received the buffer lines verbatim
+  — pandoc read every `# text` as an H1 heading and the rewritten lines
+  landed back in the buffer without their comment prefix ("h1 soup", raw
+  Python syntax errors). The content is now uncommented before piping to
+  `notebooks.md_formatter` and re-commented before replacement
+  (`notebook/percent_md.lua`), and regions/types come from the canonical cell
+  model (Model A refactor F4).
 - **Run-all (`<leader>jR`) double-executed adjacent cells**: the old
   implementation navigated with cursor-relative marker searches
   (`search(pattern, "bnW")`, missing the `c` flag) — with the cursor ON a

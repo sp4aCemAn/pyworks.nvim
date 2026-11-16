@@ -1,13 +1,15 @@
 -- Notebook-aware LSP diagnostics handling for pyworks.nvim
 --
--- jupytext's percent format stores markdown cell bodies as RAW text, which
--- is invalid Python: servers (pylsp, pyright) report syntax errors on those
--- lines and the parse failures cascade into bogus scope/undefined warnings
--- inside real code cells. With notebooks.lsp = "silence" (the default) we
--- wrap the publishDiagnostics handler and drop diagnostics that point into
--- markdown cell regions; everything else passes through untouched.
+-- Canonical jupytext percent output COMMENTS markdown cell bodies (they are
+-- valid Python), but any raw line typed mid-session — or any non-canonical
+-- percent file — makes the Python server emit a whole-file `invalid syntax`
+-- at the first offending line, cascading into bogus scope/undefined
+-- warnings across real code cells. With notebooks.lsp = "silence" (the
+-- default) we wrap the publishDiagnostics handler and drop diagnostics that
+-- point inside markdown-cell content regions (core/cell_model.markdown_regions,
+-- F4); everything else passes through untouched.
 --
--- "detach" (S4) is implemented via an LspAttach autocmd in plugin/pyworks.lua.
+-- "detach" is implemented via an LspAttach autocmd in plugin/pyworks.lua.
 -- "attach" disables this module entirely (status-quo passthrough).
 
 local M = {}
@@ -52,8 +54,8 @@ local function line_in_regions(line0, regions)
 end
 
 local function filter_diagnostics(bufnr, diagnostics)
-	local cell_engine = require("pyworks.core.cell_engine")
-	local ok_regions, regions = pcall(cell_engine.get_markdown_regions, bufnr)
+	local cell_model = require("pyworks.core.cell_model")
+	local ok_regions, regions = pcall(cell_model.markdown_regions, bufnr)
 	if not ok_regions or #regions == 0 then
 		return diagnostics
 	end

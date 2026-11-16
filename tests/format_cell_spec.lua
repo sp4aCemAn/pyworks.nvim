@@ -81,8 +81,8 @@ describe("commands format_cell", function()
 			assert.equals(2, vim.fn.exists(":PyworksFormatMarkdownCell"))
 		end)
 
-		it("should replace md content with formatter stdout", function()
-			local bufnr = region_buf({ "# %% [markdown]", "hello world", "", "# %%", "x = 1" }, 2)
+		it("should replace md content with commented formatter stdout", function()
+			local bufnr = region_buf({ "# %% [markdown]", "# hello world", "#", "# %%", "x = 1" }, 2)
 
 			local done, result = false, nil
 			local ok = format_cell.format_current_cell(function(r)
@@ -95,7 +95,48 @@ describe("commands format_cell", function()
 			assert.is_true(result)
 
 			local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-			assert.same({ "# %% [markdown]", "HELLO WORLD", "", "# %%", "x = 1" }, lines)
+			assert.same({ "# %% [markdown]", "# HELLO WORLD", "#", "# %%", "x = 1" }, lines)
+
+			vim.api.nvim_buf_delete(bufnr, { force = true })
+		end)
+
+		it("canonical content survives an identity formatter without h1-soup (F4)", function()
+			stub_config({ write_script({ "cat" }) })
+			local bufnr = region_buf({ "# %% [markdown]", "# # h1", "# plain text", "#", "# %%", "x = 1" }, 3)
+
+			local done, result = false, nil
+			format_cell.format_current_cell(function(r)
+				done, result = true, r
+			end)
+			vim.wait(5000, function()
+				return done
+			end)
+			assert.is_true(result)
+			-- comment(uncomment(x)) == x on canonical lines: buffer unchanged
+			local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+			assert.same({ "# %% [markdown]", "# # h1", "# plain text", "#", "# %%", "x = 1" }, lines)
+
+			vim.api.nvim_buf_delete(bufnr, { force = true })
+		end)
+
+		it("the formatter sees UNcommented markdown (percent_md round-trip)", function()
+			-- "sed s/^#//" removes one leading hash. If the formatter received
+			-- raw buffer lines it would also strip the outer "# " comment and
+			-- insert non-comment soup; with the codec it strips only the real
+			-- markdown heading hash, and the result is re-commented.
+			stub_config({ write_script({ "sed 's/^#//'" }) })
+			local bufnr = region_buf({ "# %% [markdown]", "# # h1", "# text", "#", "# %%", "x = 1" }, 2)
+
+			local done, result = false, nil
+			format_cell.format_current_cell(function(r)
+				done, result = true, r
+			end)
+			vim.wait(5000, function()
+				return done
+			end)
+			assert.is_true(result)
+			local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+			assert.same({ "# %% [markdown]", "#  h1", "# text", "#", "# %%", "x = 1" }, lines)
 
 			vim.api.nvim_buf_delete(bufnr, { force = true })
 		end)
