@@ -60,6 +60,12 @@ local default_config = {
 	cell_marker = "# %%", -- Cell delimiter pattern (e.g. "# COMMAND ----------" for Databricks)
 	auto_detect = true, -- Automatically detect and setup on file open
 	skip_keymaps = false, -- Skip all keymap setup (define your own)
+	notebooks = {
+		lsp = "silence", -- "silence": drop diagnostics inside markdown cells;
+		-- "detach": fully detach LSP clients from notebook buffers;
+		-- "attach": status quo (server sees raw markdown as broken Python)
+		md_formatter = { "pandoc", "-f", "gfm", "-t", "markdown" }, -- argv for formatting markdown cell content
+	},
 }
 
 -- Plugin configuration
@@ -109,6 +115,31 @@ local function validate_config(user_opts)
 	if user_opts.molten then
 		if user_opts.molten.virt_text_max_lines ~= nil and type(user_opts.molten.virt_text_max_lines) ~= "number" then
 			table.insert(warnings, "molten.virt_text_max_lines should be a number")
+		end
+	end
+
+	-- Check notebooks config
+	if user_opts.notebooks then
+		local valid_lsp_modes = { silence = true, detach = true, attach = true }
+		if user_opts.notebooks.lsp ~= nil then
+			if type(user_opts.notebooks.lsp) ~= "string" or not valid_lsp_modes[user_opts.notebooks.lsp] then
+				table.insert(warnings, "notebooks.lsp should be one of 'silence', 'detach', 'attach'")
+			end
+		end
+		if user_opts.notebooks.md_formatter ~= nil then
+			local formatter = user_opts.notebooks.md_formatter
+			local is_string_array = type(formatter) == "table" and #formatter > 0
+			if is_string_array then
+				for _, arg in ipairs(formatter) do
+					if type(arg) ~= "string" then
+						is_string_array = false
+						break
+					end
+				end
+			end
+			if not is_string_array then
+				table.insert(warnings, "notebooks.md_formatter should be a non-empty array of strings (argv)")
+			end
 		end
 	end
 
@@ -231,6 +262,12 @@ function M.setup(opts)
 
 	-- Merge user configuration with defaults
 	config = vim.tbl_deep_extend("force", default_config, opts or {})
+
+	-- Lists replace, never index-merge: tbl_deep_extend merges arrays
+	-- element-wise, so a user-supplied short list leaks the default tail.
+	if opts.notebooks and opts.notebooks.md_formatter then
+		config.notebooks.md_formatter = opts.notebooks.md_formatter
+	end
 
 	-- Configure core modules
 	local cache = require("pyworks.core.cache")

@@ -156,4 +156,63 @@ describe("pyworks", function()
 			assert.equals(".venv", config.python.preferred_venv_name, "defaults should be preserved")
 		end)
 	end)
+
+	describe("notebooks config", function()
+		it("should default notebooks.lsp to silence", function()
+			local pyworks = require("pyworks")
+			pyworks.setup()
+
+			local config = pyworks.get_config()
+			assert.equals("silence", config.notebooks.lsp)
+		end)
+
+		it("should default md_formatter to a pandoc argv array", function()
+			local pyworks = require("pyworks")
+			pyworks.setup()
+
+			local formatter = pyworks.get_config().notebooks.md_formatter
+			assert.is_table(formatter)
+			assert.equals("pandoc", formatter[1])
+		end)
+
+		it("should replace (not index-merge) a user md_formatter list", function()
+			local pyworks = require("pyworks")
+			pyworks.setup({
+				notebooks = {
+					md_formatter = { "prettier", "--parser", "markdown" },
+				},
+			})
+
+			local formatter = pyworks.get_config().notebooks.md_formatter
+			assert.equals(3, #formatter, "user list must not leak default tail entries")
+			assert.equals("prettier", formatter[1])
+			assert.equals("markdown", formatter[3])
+		end)
+
+		it("should accept valid lsp modes and warn without erroring on invalid ones", function()
+			local pyworks = require("pyworks")
+
+			pyworks.setup({ notebooks = { lsp = "detach" } })
+			assert.equals("detach", pyworks.get_config().notebooks.lsp)
+
+			-- invalid value must only warn (validate_config contract), not crash
+			vim.g.pyworks_setup_complete = nil -- allow the second setup() to run
+			local notifications_seen = {}
+			local notify_orig = vim.notify
+			vim.notify = function(msg, level)
+				table.insert(notifications_seen, { msg = tostring(msg), level = level })
+			end
+			local ok = pcall(pyworks.setup, { notebooks = { lsp = "bogus" } })
+			vim.notify = notify_orig
+
+			assert.is_true(ok, "invalid notebooks.lsp must not error")
+			local found = false
+			for _, n in ipairs(notifications_seen) do
+				if n.msg:match("notebooks%.lsp") then
+					found = true
+				end
+			end
+			assert.is_true(found, "expected a config warning mentioning notebooks.lsp")
+		end)
+	end)
 end)
