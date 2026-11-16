@@ -73,6 +73,24 @@ end
 
 local PUBLISH = "textDocument/publishDiagnostics"
 
+-- Neovim >=0.12 passes ctx.bufnr = nil for publishDiagnostics (the default
+-- diagnostic handler resolves the buffer from the params URI itself), so a
+-- notebook check that trusts ctx.bufnr alone silently disables the filter.
+-- Mirror core: ctx.bufnr first, then uri -> buffer.
+local function resolve_bufnr(ctx, result)
+	local bufnr = ctx and ctx.bufnr
+	if bufnr and bufnr > 0 and bufnr ~= -1 and vim.api.nvim_buf_is_valid(bufnr) then
+		return bufnr
+	end
+	if type(result) == "table" and type(result.uri) == "string" then
+		local ok, resolved = pcall(vim.uri_to_bufnr, result.uri)
+		if ok and resolved and resolved > 0 and vim.api.nvim_buf_is_valid(resolved) then
+			return resolved
+		end
+	end
+	return nil
+end
+
 -- functions cannot be indexed in Lua 5.1 without a metatable, so track
 -- wrapped handlers in a weak-keyed set instead of a flag field
 local wrapped_handlers = setmetatable({}, { __mode = "k" })
@@ -82,11 +100,15 @@ local function make_wrapper(original)
 		return nil
 	end
 	local wrapper = function(err, result, ctx, config)
-		if get_mode() ~= "silence" or not is_notebook_buf(ctx.bufnr) or type(result) ~= "table" then
+		if get_mode() ~= "silence" or type(result) ~= "table" then
+			return original(err, result, ctx, config)
+		end
+		local bufnr = resolve_bufnr(ctx, result)
+		if not bufnr or not is_notebook_buf(bufnr) then
 			return original(err, result, ctx, config)
 		end
 
-		local filtered, dropped = filter_diagnostics(ctx.bufnr, result.diagnostics or {})
+		local filtered, dropped = filter_diagnostics(bufnr, result.diagnostics or {})
 		if dropped == 0 then
 			return original(err, result, ctx, config)
 		end

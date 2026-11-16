@@ -13,8 +13,8 @@ All notable changes to pyworks.nvim will be documented in this file.
   wraps `textDocument/publishDiagnostics` and drops diagnostics pointing
   inside `# %% [markdown]` regions of notebook buffers only. Modes:
   `"silence"` (filter, keep completion), `"detach"` (detach every LSP client
-  from notebook buffers via an `LspAttach` autocmd),
-  `"attach"` (status quo). Non-notebook buffers and payloads outside
+  from notebook buffers via an `LspAttach` autocmd), `"attach"` (status quo).
+  Non-notebook buffers and payloads outside
   markdown regions are forwarded untouched. Neovim clients snapshot the
   global handler table at start time, so silence also wraps the handlers of
   clients that were already running when pyworks lazy-loads (via
@@ -93,6 +93,13 @@ All notable changes to pyworks.nvim will be documented in this file.
 
 ### Fixed
 
+- **Silence mode leaked diagnostics on Neovim >= 0.12** (real-world repro
+  with pylsp): for `publishDiagnostics`, newer core passes `ctx.bufnr =
+  nil` and lets the handler resolve the buffer from the payload URI. The
+  wrapper's notebook check silently returned "not a notebook" and
+  forwarded everything — pyflakes' whole-file `invalid syntax` on a raw
+  markdown line stayed visible. Buffer is now resolved `ctx.bufnr` first,
+  then `vim.uri_to_bufnr(result.uri)`.
 - **Stale command name in install-error report**: referenced
   `:PyworksListPython` (does not exist); now `:PyworksList`.
 - **`recursion_guard` could permanently stall Molten's update loop**:

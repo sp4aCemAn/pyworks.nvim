@@ -107,6 +107,29 @@ describe("notebook lsp", function()
 			vim.api.nvim_buf_delete(bufnr, { force = true })
 		end)
 
+		it("should resolve the buffer from the params URI when ctx.bufnr is absent (nvim 0.12)", function()
+			-- Neovim >=0.12 hands publishDiagnostics ctx WITHOUT a resolved
+			-- bufnr; trusting ctx.bufnr alone silently disables the filter
+			-- (real-world leak against the user's pylsp).
+			local path = vim.fn.tempname() .. "_uri.ipynb"
+			local bufnr = vim.api.nvim_create_buf(false, true)
+			vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, sample_lines)
+			vim.api.nvim_buf_set_name(bufnr, path)
+			vim.b[bufnr].pyworks_notebook_path = path
+
+			notebook_lsp.install()
+			vim.lsp.handlers[handler_key](nil, {
+				uri = "file://" .. path,
+				diagnostics = { diag(1), diag(4) },
+			}, { client_id = 1, method = handler_key })
+
+			assert.equals(1, #captured.result.diagnostics)
+			assert.equals(4, captured.result.diagnostics[1].range.start.line)
+
+			vim.api.nvim_buf_delete(bufnr, { force = true })
+			os.remove(path)
+		end)
+
 		it("should forward everything for non-notebook buffers", function()
 			local bufnr = vim.api.nvim_create_buf(false, true)
 			vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, sample_lines)

@@ -84,8 +84,12 @@ both the python LSP and markdown rendering. Three modules now close that:
   — functions can't carry flags in Lua 5.1). **Client-snapshot gotcha**:
   nvim snapshots `vim.lsp.handlers` at client start, so `install()` also
   sweeps running clients and `attach_client()` re-wraps per client from the
-  `LspAttach` autocmd — covers the common case of pylsp already running for
+  `LspAttach` autocmd   — covers the common case of pylsp already running for
   `.py` files when a notebook lazy-load first fires `setup()`.
+  **ctx.bufnr gotcha (S9)**: nvim >= 0.12 delivers publishDiagnostics with
+  `ctx.bufnr = nil`; `resolve_bufnr()` falls back to
+  `vim.uri_to_bufnr(result.uri)` — without it the notebook check silently
+  fails and every diagnostic leaks (the exact real-world bug users hit).
   `"detach"` mode is handled by the `LspAttach` autocmd
   (plugin/pyworks.lua:169) → `maybe_detach()` (client:detach_buffer on
   0.11+, vim.lsp.buf_detach_client fallback on 0.10). `"attach"` installs
