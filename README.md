@@ -142,6 +142,7 @@ For inline plot/image display:
 | `<leader>jt` | Toggle cell type (code ↔ markdown) |
 | `<leader>jJ` | Merge with cell below      |
 | `<leader>js` | Split cell at cursor       |
+| `<leader>jfm` | Format markdown cell (via `notebooks.md_formatter`) |
 
 ### Cell Folding & UI
 
@@ -194,6 +195,7 @@ For `skip_keymaps` users who prefer command-based workflows:
 | ---------------------------------- | ---------------------------------- |
 | `:PyworksNewPython [name]`         | Create Python file with cells      |
 | `:PyworksNewPythonNotebook [name]` | Create Python Jupyter notebook     |
+| `:PyworksFormatMarkdownCell`       | Format md cell under cursor (async) |
 
 ### Environment Management
 
@@ -253,6 +255,19 @@ require("pyworks").setup({
 
   -- Cell delimiter pattern (e.g. "# COMMAND ----------" for Databricks)
   cell_marker = "# %%",
+
+  -- Notebook editing behavior (percent-format .ipynb buffers)
+  notebooks = {
+    lsp = "silence",            -- "silence": drop LSP diagnostics that point
+                                -- inside markdown cells (keeps completion);
+                                -- "detach": detach all LSP clients from
+                                -- notebook buffers; "attach": status quo
+    markdown_highlight = true,  -- style markdown cell content with vim's
+                                -- runtime markdown syntax (no treesitter needed)
+    md_formatter = { "pandoc", "-f", "gfm", "-t", "markdown" },
+                                -- argv used by :PyworksFormatMarkdownCell /
+                                -- <leader>jfm; any stdin->stdout formatter works
+  },
 
   -- Auto-detection
   auto_detect = true,  -- Automatically detect and setup on file open
@@ -330,9 +345,12 @@ plugin/pyworks.lua          Entry point: autocmds (FileType, BufWinEnter, Sessio
       ├── languages/
       │   └── python.lua     Venv management, pip/uv commands, package ops
       ├── notebook/
-      │   └── jupytext.lua   .ipynb read/write via jupytext CLI
+      │   ├── jupytext.lua       .ipynb read/write via jupytext CLI
+      │   ├── lsp.lua            Notebook-aware LSP diagnostics (silence/detach)
+      │   └── markdown_hl.lua    Markdown cell content highlighting
       └── commands/
-          └── create.lua     :PyworksNewPython, :PyworksNewPythonNotebook
+          ├── create.lua         :PyworksNewPython, :PyworksNewPythonNotebook
+          └── format_cell.lua    :PyworksFormatMarkdownCell
 ```
 
 ### Startup Flow
@@ -364,6 +382,23 @@ A: Don't use `plt.show()`. Just create the plot and let Molten capture it.
 
 **Q: Notebook appears blank after session restore**
 A: Run `:PyworksReloadNotebook` to reload with jupytext conversion.
+
+**Q: My Python LSP (pylsp/pyright) reports syntax errors and bogus import/undefined warnings inside notebooks**
+A: jupytext percent scripts store markdown cell bodies as *raw text*, which is not valid Python — servers choke on those lines and the failed parse cascades into the rest of the file. By default pyworks silences it: `notebooks.lsp = "silence"` drops diagnostics pointing inside markdown cells while keeping completion and hover in code cells. What may remain is cell-order lint (redefinitions/imports-not-at-top — inherent to one sequential file); for pylsp tune the rules in your project config:
+
+```toml
+# .pyls.toml (or pyproject.toml [tool.pylsp])
+[pylsp.plugins.pycodestyle]
+ignore = ["E402", "E501"]
+```
+
+Escape hatches: `notebooks.lsp = "detach"` (no LSP clients at all on notebook buffers) or `"attach"` (raw status quo).
+
+**Q: Markdown cells don't look like markdown**
+A: Notebook buffers are `filetype=python`; `notebooks.markdown_highlight = true` (default) styles markdown cell *content* with Neovim's runtime markdown syntax (works whenever `:syntax` is enabled; no-op if you keep highlighting off). Treesitter users: markview.nvim renders jupytext percent cells natively and is the richer option — the two don't conflict.
+
+**Q: `<leader>jfm` warns that the markdown formatter is missing**
+A: The default formatter is `pandoc`. Install it, or point `notebooks.md_formatter` at any stdin→stdout markdown formatter, e.g. `{ "prettier", "--parser", "markdown" }`.
 
 **Q: E132 "Function call depth" error or notebook won't reload**
 A: Run `:PyworksResetReloadGuard` to reset the reload guard, then retry.

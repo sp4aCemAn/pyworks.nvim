@@ -126,6 +126,7 @@ CELL SELECTION & NAVIGATION~
 *<leader>j]*  Next cell (Normal mode)
 *<leader>j[*  Previous cell (Normal mode)
 *<leader>jg*  Go to cell N (prompt) (Normal mode)
+*<leader>jfm* Format markdown cell with notebooks.md_formatter (Normal mode)
 
 OUTPUT MANAGEMENT~
 
@@ -235,6 +236,13 @@ CELL OPERATIONS~
     Run the current cell and move the cursor to the next cell
     (matches the Jupyter Shift+Enter behavior)
 
+*:PyworksFormatMarkdownCell*
+    Format the markdown cell under the cursor by piping its content
+    (marker lines excluded) through notebooks.md_formatter (default:
+    pandoc GFM roundtrip). Runs asynchronously; the buffer is only
+    rewritten when the formatter exits 0. See |pyworks-troubleshooting|
+    for formatter-missing hints. Bound to <leader>jfm by default.
+
 PACKAGE MANAGEMENT~
 
 *:PyworksSync*
@@ -291,6 +299,19 @@ All settings are optional. Here are the available options with their defaults:
 
       -- Cell delimiter pattern (e.g. "# COMMAND ----------" for Databricks)
       cell_marker = "# %%",
+
+      -- Notebook editing behavior (percent-format .ipynb buffers)
+      notebooks = {
+        lsp = "silence",            -- "silence": drop LSP diagnostics that
+                                    --   point inside markdown cells (keeps
+                                    --   completion) | "detach": detach LSP
+                                    --   clients from notebook buffers |
+                                    --   "attach": status quo
+        markdown_highlight = true,  -- style markdown cell content with the
+                                    --   runtime markdown syntax
+        md_formatter = { "pandoc", "-f", "gfm", "-t", "markdown" },
+                                    -- argv for :PyworksFormatMarkdownCell
+      },
 
       -- Auto-detection
       auto_detect = true,  -- Automatically detect and setup on file open
@@ -356,6 +377,18 @@ A: This is an infinite recursion during notebook reload. Pyworks includes
 
 Q: Notebooks won't reload or appear stuck
 A: The reload guard may be stuck. Run |:PyworksResetReloadGuard| to reset.
+
+Q: Python LSP reports syntax errors / bogus warnings inside notebooks
+A: Percent scripts store markdown cell bodies as raw text (invalid Python).
+   By default pyworks drops diagnostics pointing inside markdown cells
+   (notebooks.lsp = "silence") while keeping completion. Remaining
+   cell-order lint (E402, redefinitions) is a rule choice — ignore those
+   codes in your pylsp project config, or use notebooks.lsp = "detach".
+
+Q: Markdown cells don't look like markdown
+A: notebooks.markdown_highlight = true (default) applies the runtime
+   markdown syntax to markdown cell content when :syntax is enabled.
+   Treesitter users: markview.nvim renders jupytext percent cells natively.
 
 DEBUG MODE~
 

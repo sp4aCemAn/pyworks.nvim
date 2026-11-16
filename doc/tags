@@ -1,6 +1,7 @@
 :PyworksAdd	pyworks.txt	/*:PyworksAdd*
 :PyworksDebugExtmarks	pyworks.txt	/*:PyworksDebugExtmarks*
 :PyworksDiagnostics	pyworks.txt	/*:PyworksDiagnostics*
+:PyworksFormatMarkdownCell	pyworks.txt	/*:PyworksFormatMarkdownCell*
 :PyworksHelp	pyworks.txt	/*:PyworksHelp*
 :PyworksInsertCellAbove	pyworks.txt	/*:PyworksInsertCellAbove*
 :PyworksInsertCellBelow	pyworks.txt	/*:PyworksInsertCellBelow*
@@ -32,6 +33,7 @@
 <leader>jd	pyworks.txt	/*<leader>jd*
 <leader>je	pyworks.txt	/*<leader>je*
 <leader>jf	pyworks.txt	/*<leader>jf*
+<leader>jfm	pyworks.txt	/*<leader>jfm*
 <leader>jg	pyworks.txt	/*<leader>jg*
 <leader>jj	pyworks.txt	/*<leader>jj*
 <leader>jk	pyworks.txt	/*<leader>jk*

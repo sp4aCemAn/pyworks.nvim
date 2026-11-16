@@ -59,12 +59,16 @@ lua/pyworks/init.lua      setup(), config validation/merge, user commands
                           begin/end + force_reset + user command
   core/cell_engine.lua    cell boundaries/nav/insert/split/merge/run
   notebook/jupytext.lua   BufReadCmd/BufWriteCmd for .ipynb ⇄ percent format
+  notebook/lsp.lua        Notebook LSP modes: silence (publishDiagnostics
+                          filter over markdown regions) / detach (LspAttach)
+  notebook/markdown_hl.lua Markdown cell content syntax region in pct buffers
   keymaps.lua             <leader>j* / <leader>m* maps; run-all via
                           Molten extmark polling
   ui.lua                  cell numbering virt-text, folding, float windows
   dependencies.lua        lazy-nvim dep checks, image backend detection
   diagnostics.lua / health.lua   :PyworksDiagnostics / :checkhealth pyworks
   commands/create.lua     :PyworksNewPython, :PyworksNewPythonNotebook
+  commands/format_cell.lua :PyworksFormatMarkdownCell (notebooks.md_formatter)
   utils.lua               project root/paths, system wrappers, safe IO
 ```
 
