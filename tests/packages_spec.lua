@@ -218,7 +218,10 @@ describe("packages", function()
 		it("does not prefix-flag known packages or short candidates", function()
 			assert.is_nil(packages.is_typosquat("jupyter")) -- known, though prefix of jupyterlab
 			assert.is_nil(packages.is_typosquat("vex")) -- ≥2 edits from any short known name (tox/jax/ray)
-			assert.are.equal("flask", packages.is_typosquat("fast")) -- 1 edit, correctly caught
+			-- "fast" ties at 2 edits between flask and dash; hash iteration
+			-- order picks the winner, so accept either (precedent: "scikit")
+			local closest = packages.is_typosquat("fast")
+			assert.is_true(closest == "flask" or closest == "dash", "expected flask/dash, got " .. tostring(closest))
 			assert.is_nil(packages.is_typosquat("dask")) -- known
 		end)
 
