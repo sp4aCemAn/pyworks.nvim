@@ -163,6 +163,24 @@ vim.api.nvim_create_autocmd("FileType", {
 	desc = "Pyworks: Set up language-specific keymaps and auto-init for notebooks",
 })
 
+-- Detach LSP clients from notebook buffers when notebooks.lsp = "detach".
+-- Mode and notebook checks happen inside maybe_detach(), so this autocmd is
+-- inert in silence/attach modes and for non-notebook buffers.
+vim.api.nvim_create_autocmd("LspAttach", {
+	group = augroup,
+	callback = function(ev)
+		local ok, notebook_lsp = pcall(require, "pyworks.notebook.lsp")
+		if not ok then
+			return
+		end
+		local client = vim.lsp.get_client_by_id(ev.data.client_id)
+		if client then
+			pcall(notebook_lsp.maybe_detach, ev.buf, client)
+		end
+	end,
+	desc = "Pyworks: Detach LSP clients from notebook buffers (notebooks.lsp = 'detach')",
+})
+
 -- Helper function to reload a notebook buffer properly
 -- Follows the same pattern as open_and_verify_notebook in commands/create.lua
 --

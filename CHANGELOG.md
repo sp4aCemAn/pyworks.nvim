@@ -12,7 +12,8 @@ All notable changes to pyworks.nvim will be documented in this file.
   lines and cascading bogus scope warnings across code cells. `pyworks` now
   wraps `textDocument/publishDiagnostics` and drops diagnostics pointing
   inside `# %% [markdown]` regions of notebook buffers only. Modes:
-  `"silence"` (filter, keep completion), `"detach"` (full detach — S4),
+  `"silence"` (filter, keep completion), `"detach"` (detach every LSP client
+  from notebook buffers via an `LspAttach` autocmd),
   `"attach"` (status quo). Non-notebook buffers and payloads outside
   markdown regions are forwarded untouched.
 - **`notebooks` config section**: `notebooks.lsp` (above) and

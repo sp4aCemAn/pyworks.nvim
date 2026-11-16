@@ -134,6 +134,73 @@ describe("notebook lsp", function()
 		end)
 	end)
 
+	describe("detach mode (maybe_detach)", function()
+		before_each(function()
+			package.loaded["pyworks"] = {
+				get_config = function()
+					return { notebooks = { lsp = "detach" } }
+				end,
+			}
+		end)
+
+		it("should detach 0.11-style clients from notebook buffers only", function()
+			local bufnr = make_notebook_buf(true)
+			local detached = {}
+			local client = {
+				id = 42,
+				detach_buffer = function(_, b)
+					table.insert(detached, b)
+				end,
+			}
+			assert.is_true(notebook_lsp.maybe_detach(bufnr, client))
+			assert.same({ bufnr }, detached)
+
+			local plain = vim.api.nvim_create_buf(false, true)
+			assert.is_false(notebook_lsp.maybe_detach(plain, client))
+			assert.equals(1, #detached, "non-notebook buffers must not be detached")
+
+			vim.api.nvim_buf_delete(bufnr, { force = true })
+			vim.api.nvim_buf_delete(plain, { force = true })
+		end)
+
+		it("should fall back to buf_detach_client for 0.10-style clients", function()
+			local bufnr = make_notebook_buf(true)
+			local seen = {}
+			local orig = vim.lsp.buf_detach_client
+			vim.lsp.buf_detach_client = function(b, id)
+				seen = { buf = b, id = id }
+			end
+			local detached_ok = notebook_lsp.maybe_detach(bufnr, { id = 7 })
+			vim.lsp.buf_detach_client = orig
+
+			assert.is_true(detached_ok)
+			assert.equals(bufnr, seen.buf)
+			assert.equals(7, seen.id)
+
+			vim.api.nvim_buf_delete(bufnr, { force = true })
+		end)
+
+		it("should be inert in silence mode", function()
+			package.loaded["pyworks"] = {
+				get_config = function()
+					return { notebooks = { lsp = "silence" } }
+				end,
+			}
+			local bufnr = make_notebook_buf(true)
+			local called = false
+			local client = {
+				id = 1,
+				detach_buffer = function()
+					called = true
+				end,
+			}
+			assert.is_false(notebook_lsp.maybe_detach(bufnr, client))
+			assert.is_false(called)
+
+			vim.api.nvim_buf_delete(bufnr, { force = true })
+		end)
+	end)
+
 	describe("_is_notebook_buf", function()
 		it("should detect via buffer var and via .ipynb buffer name", function()
 			local by_var = make_notebook_buf(true)

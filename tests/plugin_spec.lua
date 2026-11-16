@@ -34,4 +34,56 @@ describe("plugin/pyworks", function()
 			vim.api.nvim_buf_delete(bufnr, { force = true })
 		end)
 	end)
+
+	describe("LspAttach autocmd", function()
+		it("should be registered in the Pyworks group", function()
+			local found = vim.api.nvim_get_autocmds({ event = "LspAttach", group = "Pyworks" })
+			assert.is_true(#found > 0, "plugin/pyworks.lua must register an LspAttach autocmd")
+		end)
+
+		it("should be a safe no-op for unknown client ids", function()
+			assert.has_no.errors(function()
+				vim.api.nvim_exec_autocmds("LspAttach", {
+					buffer = vim.api.nvim_get_current_buf(),
+					data = { client_id = 999999 },
+				})
+			end)
+		end)
+
+		it("should detach the client when a notebook buffer attaches in detach mode", function()
+			package.loaded["pyworks"] = {
+				get_config = function()
+					return { notebooks = { lsp = "detach" } }
+				end,
+			}
+			package.loaded["pyworks.notebook.lsp"] = nil
+
+			local bufnr = vim.api.nvim_create_buf(false, true)
+			vim.api.nvim_buf_set_name(bufnr, vim.fn.tempname() .. ".ipynb")
+
+			local detached = {}
+			local fake_client = {
+				id = 99,
+				detach_buffer = function(_, b)
+					table.insert(detached, b)
+				end,
+			}
+			local orig_get = vim.lsp.get_client_by_id
+			vim.lsp.get_client_by_id = function(id)
+				if id == 99 then
+					return fake_client
+				end
+				return orig_get(id)
+			end
+
+			vim.api.nvim_exec_autocmds("LspAttach", { buffer = bufnr, data = { client_id = 99 } })
+
+			vim.lsp.get_client_by_id = orig_get
+			package.loaded["pyworks"] = nil
+			package.loaded["pyworks.notebook.lsp"] = nil
+
+			assert.same({ bufnr }, detached)
+			vim.api.nvim_buf_delete(bufnr, { force = true })
+		end)
+	end)
 end)

@@ -114,6 +114,32 @@ function M.uninstall()
 	return true
 end
 
+-- Public wrapper so plugin/ and tests share one notebook-detection rule.
+function M.is_notebook_buf(bufnr)
+	vim.validate({ bufnr = { bufnr, "number" } })
+	return is_notebook_buf(bufnr)
+end
+
+-- Detach-mode hook, called from the LspAttach autocmd in plugin/pyworks.lua.
+-- `client` is a live vim.lsp.Client (or test double with an optional
+-- detach_buffer method). No-op unless notebooks.lsp == "detach".
+function M.maybe_detach(bufnr, client)
+	vim.validate({
+		bufnr = { bufnr, "number" },
+		client = { client, "table" },
+	})
+	if get_mode() ~= "detach" or not is_notebook_buf(bufnr) then
+		return false
+	end
+	if type(client.detach_buffer) == "function" then
+		-- Neovim 0.11+
+		client:detach_buffer(bufnr)
+	else
+		vim.lsp.buf_detach_client(bufnr, client.id) -- 0.10 fallback (deprecated API)
+	end
+	return true
+end
+
 M._is_notebook_buf = is_notebook_buf
 M._filter_diagnostics = filter_diagnostics
 
