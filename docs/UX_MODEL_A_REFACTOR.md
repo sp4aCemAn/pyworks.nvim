@@ -80,7 +80,7 @@ silence/highlight/formatter work — parts of it are superseded here (F5).
       per AGENTS.md. Specs absorb `get_markdown_regions` tests (keep shim
       delegating). Acceptance: table-driven tests incl. empty file,
       consecutive markers, md-last-to-EOF, custom markers.
-- [ ] **F2 — `notebook/percent_md.lua`**: `comment(content_lines)` /
+- [x] **F2 — `notebook/percent_md.lua`**: `comment(content_lines)` /
       `uncomment(md_lines)` exactly per Established facts above; round-trip
       property tests (incl. `"## h1"` stability); golden-file tests only if
       a runnable jupytext exists in the environment (skip otherwise —
