@@ -17,25 +17,36 @@ Neovim ≥ 0.10. Entry points: `plugin/pyworks.lua` (autocmds) and
 
 ## Current state (2026-11-16)
 
-- Branch `lspcleanup` (from `3dfd75c`), PUSHED, PR not yet opened: notebook
-  LSP/markdown work landed as slices S1–S9 (see CHANGELOG [Unreleased]):
-  `notebooks.lsp` silence/detach/attach (default **silence** — behavior
-  change), `:PyworksFormatMarkdownCell` + `<leader>jfm` (`md_formatter`
-  argv), S8 running-client wrap, S9 `ctx.bufnr=nil` URI-fallback fix
-  (real-world pylsp leak, reproduced + verified end-to-end with the user's
-  config). Host suite green (~315), stylua clean. packages_spec typosquat
-  tie-tolerance test fixes also on branch (see thread #5).
-- **Md UX re-evaluated after S9**: investigation proved jupytext 1.19
-  percent CANONICALLY comments markdown cells and `pythonComment` makes
-  the S5 syntax-region highlighter dead on real buffers. Outcome: S10–S12
-  restructuring into the **Model A foundation refactor (F1–F6)** — full
-  brief, verified facts, and acceptance criteria:
-  **`docs/UX_MODEL_A_REFACTOR.md`**. Next session: execute F1.
+- Branch `lspcleanup` (from `3dfd75c`), PUSHED through `7e5fd59`; PR not yet
+  opened. Notebook LSP/markdown work landed as S1–S9 (see CHANGELOG
+  [Unreleased]) and was verified end-to-end against the user's real config
+  (nvim 0.12.6 + mason pylsp + jupytext 1.19.3, host macOS).
+- **F1–F6 Model A foundation refactor COMPLETE (this session, local
+  commits `b82fab4..0c95343`, not yet pushed)**:
+  F1 `core/cell_model.lua` (canonical cells + cell_at/markers/
+  markdown_regions/for_buffer/is_marker_line; get_markdown_regions shim);
+  F2 `notebook/percent_md.lua` (comment/uncomment codec; golden test
+  against real jupytext 1.19.3 in container); F3 consumers migrated —
+  run-all (`<leader>jR`) now model-driven, **fixes the bnW double-execution
+  bug** (regression spec drives the real keymap with an async Molten stub);
+  F4 lsp.lua + format_cell use the model/codec (formatter round-trips
+  commented md — no h1-soup); F5 dead `markdown_hl.lua` +
+  `notebooks.markdown_highlight` removed; F6 `notebook/md_view.lua`
+  inline `# ` concealment (`md_conceal` default true; `md_fold_default`
+  false). SPIKE FIRST done and render-verified via an ext_linegrid
+  msgpack-RPC driver — findings incl. the `^`-must-lead-each-`\|`-branch
+  trap + "`\%>=` doesn't exist" + "conceal unmeasurable headless-without-
+  UI" are in UX_MODEL_A_REFACTOR.md and AGENTS.md gotchas.
+  Gates: host suite green at every slice (~345 tests), container unit ALL
+  green incl. golden test, container e2e unchanged 7/9 (2 red = KNOWN
+  upstream Molten iopub bug, thread #1). stylua clean; selene not installed
+  locally (CI job will judge).
 - HEAD `e09e27e` era: code review outcomes, typosquat guard,
   recursion_guard fix, container test env.
-- Test suite (containerized): `unit` ALL GREEN (~290 tests),
-  `scenarios` 17/17, `e2e` 7/9 — the 2 red steps are a KNOWN UPSTREAM
-  Molten bug (see below), NOT pyworks regressions.
+- Test suite (containerized): `unit` ALL GREEN (~315 tests incl. new
+  cell_model/percent_md/md_view specs), `scenarios` 17/17, `e2e` 7/9 — the
+  2 red steps are a KNOWN UPSTREAM Molten bug (see below), NOT pyworks
+  regressions.
 - Everything about running/testing: `test/README.md` +
   `test/ENVIRONMENT_PLAN.md` (design, findings, security posture).
 
@@ -56,8 +67,8 @@ Neovim ≥ 0.10. Entry points: `plugin/pyworks.lua` (autocmds) and
   completion, kills the cascade. Region = content lines only (markers stay
   python). Detach implemented via LspAttach + `client:detach_buffer`
   (0.11) / `vim.lsp.buf_detach_client` (0.10). Flow doc:
-  `docs/internals/notebooks.md` ("LSP & markdown ergonomics"). NOTE: the
-  region source migrates to the cell model in F1/F4.
+  `docs/internals/notebooks.md` ("LSP & markdown ergonomics"). DONE in
+  F4: the region source is now `core/cell_model.lua` (`markdown_regions`).
 
 - **2026-11-14** — Full code review graded the repo B; findings drove the
   subsequent work. Report was chat-only; key items are in AGENTS.md's
@@ -104,12 +115,18 @@ Neovim ≥ 0.10. Entry points: `plugin/pyworks.lua` (autocmds) and
    equal-distance ties by `pairs()` iteration order — nondeterministic
    canonical across processes. Tests now tie-tolerant; real fix = stable
    tie-break (e.g. lexicographic) + determinism test.
-6. **F1–F6 foundation refactor** (the active work): Model A presentation
-   layer — cell model, percent_md codec, consumer migration (fixes run-all
-   `"bnW"` off-by-one / double-execution as F3), formatter comment round-
-   trip, remove dead markdown_hl, inline md concealment spike+build.
-   Full brief + checklist: `docs/UX_MODEL_A_REFACTOR.md`. Next action:
-   execute F1.
+ 6. **F1–F6 foundation refactor — COMPLETE 2026-11-16** (`b82fab4..
+    0c95343` on `lspcleanup`, LOCAL/UNPUSHED). Model A presentation layer
+    shipped: cell model, percent_md codec, consumer migration (run-all
+    double-execution fixed), formatter comment round-trip, markdown_hl
+    removed, inline md concealment (spike verified against a real
+    ext_linegrid render). NEXT ACTIONS: (a) push + open the PR; (b)
+    interactive eyeball of F6 feel on the user's real config — cursor
+    motion through the hidden prefix & insert-boundary UX CANNOT be
+    asserted automatically (spike finding #1c); tweak
+    `concealcursor`/scope or flip `md_conceal` default based on that
+    report; (c) F6 note: `cell_fold_expr` calls `cell_at` per md marker
+    (O(n²) on huge notebooks — profile if real ones feel slow).
 7. Two remaining 2026-11 review findings still not in AGENTS known-bugs:
    installed-packages `invalidate` key mismatch; `validate_package_names`
    absent from the live exec path. Flag-only; each needs own change+tests.
