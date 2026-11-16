@@ -15,7 +15,10 @@ All notable changes to pyworks.nvim will be documented in this file.
   `"silence"` (filter, keep completion), `"detach"` (detach every LSP client
   from notebook buffers via an `LspAttach` autocmd),
   `"attach"` (status quo). Non-notebook buffers and payloads outside
-  markdown regions are forwarded untouched.
+  markdown regions are forwarded untouched. Neovim clients snapshot the
+  global handler table at start time, so silence also wraps the handlers of
+  clients that were already running when pyworks lazy-loads (via
+  `LspAttach` + an install-time sweep of `vim.lsp.get_clients()`).
 - **`notebooks` config section**: `notebooks.lsp` (above) and
   `notebooks.md_formatter` (argv array, default pandoc, used to format
   markdown cell content). Invalid values warn without crashing.

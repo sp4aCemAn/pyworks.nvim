@@ -175,6 +175,7 @@ vim.api.nvim_create_autocmd("LspAttach", {
 		end
 		local client = vim.lsp.get_client_by_id(ev.data.client_id)
 		if client then
+			pcall(notebook_lsp.attach_client, client)
 			pcall(notebook_lsp.maybe_detach, ev.buf, client)
 		end
 	end,

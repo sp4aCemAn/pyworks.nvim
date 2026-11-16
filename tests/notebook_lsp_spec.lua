@@ -132,6 +132,58 @@ describe("notebook lsp", function()
 				})
 			end)
 		end)
+
+		it("should drop pylsp-pyflakes whole-file 'invalid syntax' on md content lines (EOF cell too)", function()
+			-- Mirrors the real-world repro: 80 code lines, markers at
+			-- 1-based 81/83 with raw md at 82 and 84 (last cell to EOF).
+			-- pylsp's pyflakes plugin reports the parse failure at the
+			-- first offending line (0-based 81 and beyond).
+			local lines = {}
+			for i = 1, 80 do
+				table.insert(lines, "x" .. i .. " = 1")
+			end
+			table.insert(lines, "# %% [markdown]") -- 81
+			table.insert(lines, "this is a test") -- 82
+			table.insert(lines, "# %% [markdown]") -- 83
+			table.insert(lines, "another raw line") -- 84
+
+			local bufnr = vim.api.nvim_create_buf(false, true)
+			vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+			vim.b[bufnr].pyworks_notebook_path = "/tmp/graph/test.ipynb"
+
+			vim.lsp.handlers[handler_key](nil, {
+				uri = "file:///graph/test.ipynb",
+				diagnostics = { diag(81), diag(83), diag(5) },
+			}, { bufnr = bufnr })
+
+			local kept = captured.result.diagnostics
+			assert.equals(1, #kept)
+			assert.equals(5, kept[1].range.start.line, "only the code-cell diagnostic may survive")
+
+			vim.api.nvim_buf_delete(bufnr, { force = true })
+		end)
+	end)
+
+	describe("attach_client", function()
+		it("should wrap a running client's handlers exactly once and filter via them", function()
+			local forwarded = {}
+			local client = {
+				handlers = {
+					["textDocument/publishDiagnostics"] = function(err, result, ctx)
+						table.insert(forwarded, #(result.diagnostics or {}))
+					end,
+				},
+			}
+
+			assert.is_true(notebook_lsp.attach_client(client))
+			assert.is_false(notebook_lsp.attach_client(client), "must not double-wrap")
+
+			local bufnr = make_notebook_buf(true)
+			client.handlers[handler_key](nil, { diagnostics = { diag(1), diag(4) } }, { bufnr = bufnr })
+			assert.same({ 1 }, forwarded, "md-region diagnostic must be filtered for this client too")
+
+			vim.api.nvim_buf_delete(bufnr, { force = true })
+		end)
 	end)
 
 	describe("detach mode (maybe_detach)", function()

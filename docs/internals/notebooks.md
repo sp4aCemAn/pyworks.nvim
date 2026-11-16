@@ -80,6 +80,12 @@ both the python LSP and markdown rendering. Three modules now close that:
   falls in a markdown region (`cell_engine.get_markdown_regions`,
   cell_engine.lua:96) and forwards everything else to the saved original
   handler. Payloads are shallow-copied only when something is dropped.
+  Handler wrapping is idempotent via a weak-key registry (`wrapped_handlers`
+  — functions can't carry flags in Lua 5.1). **Client-snapshot gotcha**:
+  nvim snapshots `vim.lsp.handlers` at client start, so `install()` also
+  sweeps running clients and `attach_client()` re-wraps per client from the
+  `LspAttach` autocmd — covers the common case of pylsp already running for
+  `.py` files when a notebook lazy-load first fires `setup()`.
   `"detach"` mode is handled by the `LspAttach` autocmd
   (plugin/pyworks.lua:169) → `maybe_detach()` (client:detach_buffer on
   0.11+, vim.lsp.buf_detach_client fallback on 0.10). `"attach"` installs

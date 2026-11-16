@@ -71,23 +71,24 @@ local function filter_diagnostics(bufnr, diagnostics)
 	return kept, dropped
 end
 
-function M.install()
-	if installed then
-		return false
-	end
-	if get_mode() == "attach" then
-		return false
-	end
+local PUBLISH = "textDocument/publishDiagnostics"
 
-	original_handler = vim.lsp.handlers["textDocument/publishDiagnostics"]
-	vim.lsp.handlers["textDocument/publishDiagnostics"] = function(err, result, ctx, config)
+-- functions cannot be indexed in Lua 5.1 without a metatable, so track
+-- wrapped handlers in a weak-keyed set instead of a flag field
+local wrapped_handlers = setmetatable({}, { __mode = "k" })
+
+local function make_wrapper(original)
+	if type(original) ~= "function" or wrapped_handlers[original] then
+		return nil
+	end
+	local wrapper = function(err, result, ctx, config)
 		if get_mode() ~= "silence" or not is_notebook_buf(ctx.bufnr) or type(result) ~= "table" then
-			return original_handler(err, result, ctx, config)
+			return original(err, result, ctx, config)
 		end
 
 		local filtered, dropped = filter_diagnostics(ctx.bufnr, result.diagnostics or {})
 		if dropped == 0 then
-			return original_handler(err, result, ctx, config)
+			return original(err, result, ctx, config)
 		end
 
 		-- Shallow-copy the payload so we never mutate the object other
@@ -97,10 +98,52 @@ function M.install()
 			kind = result.kind,
 			diagnostics = filtered,
 		}
-		return original_handler(err, patched, ctx, config)
+		return original(err, patched, ctx, config)
+	end
+	wrapped_handlers[wrapper] = true
+	return wrapper
+end
+
+function M.install()
+	if installed then
+		return false
+	end
+	if get_mode() == "attach" then
+		return false
 	end
 
+	original_handler = vim.lsp.handlers[PUBLISH]
+	local wrapper = make_wrapper(original_handler)
+	if not wrapper then
+		return false
+	end
+	vim.lsp.handlers[PUBLISH] = wrapper
 	installed = true
+
+	-- Clients snapshot vim.lsp.handlers at start time; anything already
+	-- running (e.g. pylsp attached to a .py file before this notebook-only
+	-- lazy load fires) needs the wrapper on its own handler table.
+	if vim.lsp.get_clients then
+		for _, client in ipairs(vim.lsp.get_clients()) do
+			pcall(M.attach_client, client)
+		end
+	end
+
+	return true
+end
+
+-- Wrap an already-started client's publishDiagnostics handler. Idempotent;
+-- called from install() and from the LspAttach autocmd in plugin/.
+function M.attach_client(client)
+	vim.validate({ client = { client, "table" } })
+	if type(client.handlers) ~= "table" or get_mode() ~= "silence" then
+		return false
+	end
+	local wrapper = make_wrapper(client.handlers[PUBLISH])
+	if not wrapper then
+		return false
+	end
+	client.handlers[PUBLISH] = wrapper
 	return true
 end
 
