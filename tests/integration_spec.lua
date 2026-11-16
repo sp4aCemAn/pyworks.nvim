@@ -51,6 +51,7 @@ describe("integration", function()
 				"PyworksSplitCell",
 				"PyworksRunCell",
 				"PyworksRunCellAdvance",
+				"PyworksFormatMarkdownCell",
 			}
 
 			for _, cmd in ipairs(expected_commands) do

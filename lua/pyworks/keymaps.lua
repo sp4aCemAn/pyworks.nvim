@@ -776,6 +776,11 @@ function M.setup_buffer_keymaps()
 			vim.notify("No previous cell", vim.log.levels.INFO)
 		end
 	end, vim.tbl_extend("force", opts, { desc = "Previous cell" }))
+
+	-- Format markdown cell content (independent of Molten; notebooks.md_formatter)
+	vim.keymap.set("n", "<leader>jfm", function()
+		require("pyworks.commands.format_cell").format_current_cell()
+	end, vim.tbl_extend("force", opts, { desc = "Format markdown cell with notebooks.md_formatter" }))
 end
 
 -- Set up Molten kernel management keymaps

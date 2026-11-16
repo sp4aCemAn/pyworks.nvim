@@ -29,6 +29,12 @@ All notable changes to pyworks.nvim will be documented in this file.
   lines; applied on every jupytext read/reload. No-op when syntax
   highlighting is disabled or when the option is false; markview.nvim
   remains the richer treesitter-based alternative (README).
+- **`:PyworksFormatMarkdownCell` / `<leader>jfm`**: runs the configured
+  `notebooks.md_formatter` (argv, default `pandoc -f gfm -t markdown`) over
+  the markdown cell under the cursor and replaces its content with the
+  formatter's output — async, buffer untouched on failure, helpful hint
+  when the formatter binary is missing. Marker lines are never passed to
+  (or rewritten by) the formatter.
 - **Typosquat guard for package installs** (security): auto-detected import
   names — derived from (potentially untrusted) file content — are now checked
   against a curated set of known packages using PEP 503 normalization plus

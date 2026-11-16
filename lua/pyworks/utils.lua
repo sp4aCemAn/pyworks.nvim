@@ -266,6 +266,7 @@ function M.async_system_call(cmd, callback, options)
 		text = true,
 		cwd = options.cwd,
 		env = options.env,
+		stdin = options.stdin,
 		timeout = timeout_ms > 0 and timeout_ms or nil,
 	}
 

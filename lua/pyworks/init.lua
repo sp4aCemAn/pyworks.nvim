@@ -313,6 +313,8 @@ function M.setup(opts)
 
 	-- Load notebook creation commands
 	require("pyworks.commands.create")
+	-- Load markdown cell formatting command
+	require("pyworks.commands.format_cell")
 
 	-- Cell operation commands (for skip_keymaps users — Issue #4)
 	vim.api.nvim_create_user_command("PyworksNextCell", function()
@@ -536,9 +538,10 @@ vim.api.nvim_create_user_command("PyworksHelp", function()
 		"    <leader>jR   Run all cells (waits for each)",
 		"",
 		"  CELL CREATION                                   CELL OPERATIONS",
-		"    <leader>ja   Insert code cell above             <leader>jt   Toggle code/markdown",
-		"    <leader>jb   Insert code cell below             <leader>jJ   Merge with cell below",
-		"    <leader>jma  Insert markdown above              <leader>js   Split cell at cursor",
+		"    :PyworksFormatMarkdownCell    Format md cell       <leader>jt   Toggle code/markdown",
+		"    <leader>ja   Insert code cell above             <leader>jJ   Merge with cell below",
+		"    <leader>jb   Insert code cell below             <leader>js   Split cell at cursor",
+		"    <leader>jma  Insert markdown above              <leader>jfm  Format markdown cell",
 		"    <leader>jmb  Insert markdown below",
 		"",
 		"  OUTPUT MANAGEMENT                               CELL FOLDING",
