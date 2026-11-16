@@ -15,6 +15,13 @@ function M.get_cell_pattern()
 	return "^" .. vim.pesc(config.cell_marker)
 end
 
+-- Raw configured marker text (e.g. "# %%"), for callers building their own
+-- regexes (notebook/markdown_hl.lua).
+function M.get_marker()
+	vim.validate({})
+	return config.cell_marker
+end
+
 -- Vim-regex pattern for use with vim.fn.search(). Exported so keymaps.lua
 -- can use the configured marker instead of hardcoding "^# %%".
 function M.vim_search_pattern()

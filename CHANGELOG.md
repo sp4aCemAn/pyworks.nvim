@@ -21,6 +21,14 @@ All notable changes to pyworks.nvim will be documented in this file.
   markdown cell content). Invalid values warn without crashing.
   Lists use replace semantics on merge (no `tbl_deep_extend` index-merge
   tail leak).
+- **Markdown cell content highlighting** (`notebooks.markdown_highlight`,
+  default true): notebook buffers are `filetype=python`, so raw markdown
+  cell bodies previously got zero markdown styling. A buffer-local
+  `pyworksMdCell` syntax region (marker line stays comment-styled, next
+  marker excluded) now feeds `$VIMRUNTIME` markdown syntax to the content
+  lines; applied on every jupytext read/reload. No-op when syntax
+  highlighting is disabled or when the option is false; markview.nvim
+  remains the richer treesitter-based alternative (README).
 - **Typosquat guard for package installs** (security): auto-detected import
   names — derived from (potentially untrusted) file content — are now checked
   against a curated set of known packages using PEP 503 normalization plus
