@@ -64,7 +64,6 @@ local default_config = {
 		lsp = "silence", -- "silence": drop diagnostics inside markdown cells;
 		-- "detach": fully detach LSP clients from notebook buffers;
 		-- "attach": status quo (server sees raw markdown as broken Python)
-		markdown_highlight = true, -- style markdown cell content with runtime md syntax
 		md_formatter = { "pandoc", "-f", "gfm", "-t", "markdown" }, -- argv for formatting markdown cell content
 	},
 }
@@ -126,12 +125,6 @@ local function validate_config(user_opts)
 			if type(user_opts.notebooks.lsp) ~= "string" or not valid_lsp_modes[user_opts.notebooks.lsp] then
 				table.insert(warnings, "notebooks.lsp should be one of 'silence', 'detach', 'attach'")
 			end
-		end
-		if
-			user_opts.notebooks.markdown_highlight ~= nil
-			and type(user_opts.notebooks.markdown_highlight) ~= "boolean"
-		then
-			table.insert(warnings, "notebooks.markdown_highlight should be boolean")
 		end
 		if user_opts.notebooks.md_formatter ~= nil then
 			local formatter = user_opts.notebooks.md_formatter

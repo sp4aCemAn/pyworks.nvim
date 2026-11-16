@@ -307,8 +307,6 @@ All settings are optional. Here are the available options with their defaults:
                                     --   completion) | "detach": detach LSP
                                     --   clients from notebook buffers |
                                     --   "attach": status quo
-        markdown_highlight = true,  -- style markdown cell content with the
-                                    --   runtime markdown syntax
         md_formatter = { "pandoc", "-f", "gfm", "-t", "markdown" },
                                     -- argv for :PyworksFormatMarkdownCell
       },
@@ -386,9 +384,9 @@ A: Percent scripts store markdown cell bodies as raw text (invalid Python).
    codes in your pylsp project config, or use notebooks.lsp = "detach".
 
 Q: Markdown cells don't look like markdown
-A: notebooks.markdown_highlight = true (default) applies the runtime
-   markdown syntax to markdown cell content when :syntax is enabled.
-   Treesitter users: markview.nvim renders jupytext percent cells natively.
+A: Notebook buffers are filetype=python, so markdown cell content renders
+   as comments. For richer styling (headings, bold), use markview.nvim —
+   it renders jupytext percent cells natively and composes with pyworks.
 
 DEBUG MODE~
 

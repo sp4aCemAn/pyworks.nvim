@@ -94,11 +94,11 @@ silence/highlight/formatter work — parts of it are superseded here (F5).
       executed exactly once and markdown skipped by TYPE not cursor trick;
       CHANGELOG entry (user-visible double-run fix); container e2e still 7/9
       (2 red = upstream Molten iopub, documented).
-- [ ] **F4 — migrate F1/F2 into `notebook/lsp.lua` + `commands/format_cell.lua`**:
+- [x] **F4 — migrate F1/F2 into `notebook/lsp.lua` + `commands/format_cell.lua`**:
       filter regions from model; formatter: uncomment → md_formatter stdin →
       comment → replace content range. Acceptance: format of canonical
       `# text` content round-trips through a stub formatter without h1-soup.
-- [ ] **F5 — remove `notebook/markdown_hl.lua` + `notebooks.markdown_highlight`**
+- [x] **F5 — remove `notebook/markdown_hl.lua` + `notebooks.markdown_highlight`**
       (+ spec, docs, CHANGELOG [Unreleased] fix-note). Commit message cites
       this file's dead-end section.
 - [ ] **F6 — `notebook/md_view.lua`**: inline `# ` concealment via

@@ -63,7 +63,7 @@ lua/pyworks/init.lua      setup(), config validation/merge, user commands
   notebook/jupytext.lua   BufReadCmd/BufWriteCmd for .ipynb ⇄ percent format
   notebook/lsp.lua        Notebook LSP modes: silence (publishDiagnostics
                           filter over markdown regions) / detach (LspAttach)
-  notebook/markdown_hl.lua Markdown cell content syntax region in pct buffers
+  notebook/percent_md.lua jupytext percent markdown comment/uncomment codec
   keymaps.lua             <leader>j* / <leader>m* maps; run-all via
                           Molten extmark polling
   ui.lua                  cell numbering virt-text, folding, float windows

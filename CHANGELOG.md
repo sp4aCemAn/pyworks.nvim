@@ -23,15 +23,7 @@ All notable changes to pyworks.nvim will be documented in this file.
   `notebooks.md_formatter` (argv array, default pandoc, used to format
   markdown cell content). Invalid values warn without crashing.
   Lists use replace semantics on merge (no `tbl_deep_extend` index-merge
-  tail leak).
-- **Markdown cell content highlighting** (`notebooks.markdown_highlight`,
-  default true): notebook buffers are `filetype=python`, so raw markdown
-  cell bodies previously got zero markdown styling. A buffer-local
-  `pyworksMdCell` syntax region (marker line stays comment-styled, next
-  marker excluded) now feeds `$VIMRUNTIME` markdown syntax to the content
-  lines; applied on every jupytext read/reload. No-op when syntax
-  highlighting is disabled or when the option is false; markview.nvim
-  remains the richer treesitter-based alternative (README).
+   tail leak).
 - **`:PyworksFormatMarkdownCell` / `<leader>jfm`**: runs the configured
   `notebooks.md_formatter` (argv, default `pandoc -f gfm -t markdown`) over
   the markdown cell under the cursor and replaces its content with the
@@ -90,6 +82,20 @@ All notable changes to pyworks.nvim will be documented in this file.
 - **Cold-start rule documented** in `test/README.md`, `container.sh --help`,
   and `test/ENVIRONMENT_PLAN.md`: run `warm` before `unit`/`scenarios`/`e2e`
   on a cold sandbox — test runs have no network egress by design.
+
+### Removed
+
+- **`notebooks.markdown_highlight` + `notebook/markdown_hl.lua`** (added
+  earlier in this same unreleased cycle, never in a release): the
+  `pyworksMdCell` syntax region can never render on real notebook buffers —
+  canonical jupytext percent comments markdown cell content, and
+  `pythonComment` (`syn match "#.*$"`) wins the same-position highlight
+  tie against any later-defined region, so the feature was dead code that
+  only appeared to work in specs (their buffers lack `filetype=python`).
+  Markdown presentation moves to Model A inline concealment (F6);
+  markview.nvim remains the richer treesitter-based option for styled
+  markdown. Users setting the option can delete the line — unknown
+  `notebooks.*` keys are ignored.
 
 ### Fixed
 

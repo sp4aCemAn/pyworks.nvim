@@ -262,8 +262,6 @@ require("pyworks").setup({
                                 -- inside markdown cells (keeps completion);
                                 -- "detach": detach all LSP clients from
                                 -- notebook buffers; "attach": status quo
-    markdown_highlight = true,  -- style markdown cell content with vim's
-                                -- runtime markdown syntax (no treesitter needed)
     md_formatter = { "pandoc", "-f", "gfm", "-t", "markdown" },
                                 -- argv used by :PyworksFormatMarkdownCell /
                                 -- <leader>jfm; any stdin->stdout formatter works
@@ -336,6 +334,7 @@ plugin/pyworks.lua          Entry point: autocmds (FileType, BufWinEnter, Sessio
       ├── core/
       │   ├── cache.lua          TTL-based in-memory cache
       │   ├── cell_engine.lua    Cell navigation, manipulation, folding
+      │   ├── cell_model.lua     Canonical percent-buffer cell model
       │   ├── detector.lua       File routing, kernel auto-init
       │   ├── error_handler.lua  Protected calls, filepath validation
       │   ├── notifications.lua  Deduped user notifications
@@ -347,7 +346,7 @@ plugin/pyworks.lua          Entry point: autocmds (FileType, BufWinEnter, Sessio
       ├── notebook/
       │   ├── jupytext.lua       .ipynb read/write via jupytext CLI
       │   ├── lsp.lua            Notebook-aware LSP diagnostics (silence/detach)
-      │   └── markdown_hl.lua    Markdown cell content highlighting
+      │   └── percent_md.lua     jupytext percent markdown comment codec
       └── commands/
           ├── create.lua         :PyworksNewPython, :PyworksNewPythonNotebook
           └── format_cell.lua    :PyworksFormatMarkdownCell
@@ -395,7 +394,7 @@ ignore = ["E402", "E501"]
 Escape hatches: `notebooks.lsp = "detach"` (no LSP clients at all on notebook buffers) or `"attach"` (raw status quo).
 
 **Q: Markdown cells don't look like markdown**
-A: Notebook buffers are `filetype=python`; `notebooks.markdown_highlight = true` (default) styles markdown cell *content* with Neovim's runtime markdown syntax (works whenever `:syntax` is enabled; no-op if you keep highlighting off). Treesitter users: markview.nvim renders jupytext percent cells natively and is the richer option — the two don't conflict.
+A: Notebook buffers are `filetype=python`, so markdown cell content renders as comments. For richer styling (headings, bold, inline images), use [markview.nvim](https://github.com/OXY2CREATIONS/markview.nvim) — it renders jupytext percent cells natively and composes cleanly with pyworks.
 
 **Q: `<leader>jfm` warns that the markdown formatter is missing**
 A: The default formatter is `pandoc`. Install it, or point `notebooks.md_formatter` at any stdin→stdout markdown formatter, e.g. `{ "prettier", "--parser", "markdown" }`.

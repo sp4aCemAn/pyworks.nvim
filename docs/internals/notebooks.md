@@ -72,10 +72,14 @@ installed later in-session, poll marker every 1s × 30 (VENV_CHECK_*, line 14).
 
 Canonical jupytext percent COMMENTS markdown bodies (valid Python), but raw
 lines typed mid-session — or non-canonical percent files — break both the
-python LSP and markdown rendering. Three modules now close that (F4 wires
-them to the canonical cell model / percent_md codec):
+python LSP and markdown rendering. Two modules close the LSP/format gap
+(F4 wires them to the canonical cell model / percent_md codec); markdown
+*styling* is markview.nvim territory (Model A F6 adds inline concealment).
+The S5 `notebook/markdown_hl.lua` syntax-region approach was removed in F5:
+`pythonComment` outranks any same-position region, so it could never render
+on real (filetype=python) buffers — see docs/UX_MODEL_A_REFACTOR.md.
 
-- **`notebook/lsp.lua`** — `install()` (from `setup()`, init.lua:299) wraps
+- **`notebook/lsp.lua`** — `install()` (from `setup()`, init.lua:292) wraps
   `vim.lsp.handlers["textDocument/publishDiagnostics"]`; for notebook
   buffers (identified by `b:pyworks_notebook_path`, fallback `%.ipynb$`
   buffer name) in mode `"silence"` it drops diagnostics whose start line
@@ -97,14 +101,7 @@ them to the canonical cell model / percent_md codec):
   `"detach"` mode is handled by the `LspAttach` autocmd
   (plugin/pyworks.lua:169) → `maybe_detach()` (client:detach_buffer on
   0.11+, vim.lsp.buf_detach_client fallback on 0.10). `"attach"` installs
-  nothing.
-- **`notebook/markdown_hl.lua`** — `setup_buffer()` defines a buffer-local
-  `pyworksMdCell` syntax region (`syntax include @pyworksMD` + runtime
-  markdown.vim); start line is shifted off the marker (`ms=e+1`, glued —
-  offsets must not be a separate token or vim throws E399), `keepend`
-  excludes the next marker. Idempotent redefine; called from
-  `read_notebook` success path (jupytext.lua:254) so reloads re-apply.
-  No-ops when `vim.g.syntax_on ~= 1` or `markdown_highlight = false`.
+   nothing.
 - **`commands/format_cell.lua`** — `:PyworksFormatMarkdownCell` /
   `<leader>jfm` (keymaps.lua tail): region via
   `_find_enclosing_md_region` (now a `cell_model.cell_at` call-through, F4 —
@@ -116,9 +113,9 @@ them to the canonical cell model / percent_md codec):
   comment/uncomment step would feed pandoc `# text` as an H1 and drop raw
   Python lines back into the buffer ("h1 soup").
 
-Config: `notebooks = { lsp, markdown_highlight, md_formatter }`
+Config: `notebooks = { lsp, md_formatter }`
 (init.lua:63); `md_formatter` uses replace semantics on merge
-(init.lua:276) because `tbl_deep_extend` index-merges arrays.
+(init.lua:266) because `tbl_deep_extend` index-merges arrays.
 
 ## Invariants
 

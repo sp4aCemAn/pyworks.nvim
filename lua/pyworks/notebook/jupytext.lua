@@ -246,13 +246,6 @@ local function read_notebook(bufnr, filepath)
 			-- Store original filepath for saving
 			vim.b[bufnr].pyworks_notebook_path = filepath
 			vim.b[bufnr].pyworks_notebook_loaded = true
-
-			-- Style markdown cell content (idempotent redefine; also fires
-			-- on reloads via :edit)
-			local ok_mdhl, markdown_hl = pcall(require, "pyworks.notebook.markdown_hl")
-			if ok_mdhl then
-				pcall(markdown_hl.setup_buffer, bufnr)
-			end
 		else
 			-- Conversion failed - show JSON fallback with helpful message
 			local read_ok, file_content = pcall(vim.fn.readfile, filepath)

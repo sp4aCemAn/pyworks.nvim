@@ -16,7 +16,7 @@ function M.get_cell_pattern()
 end
 
 -- Raw configured marker text (e.g. "# %%"), for callers building their own
--- regexes (notebook/markdown_hl.lua).
+-- regexes around the marker itself.
 function M.get_marker()
 	vim.validate({})
 	return config.cell_marker
