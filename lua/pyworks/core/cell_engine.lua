@@ -91,26 +91,12 @@ end
 
 -- Line ranges of markdown cell *content*: marker line and the following
 -- marker are excluded; the final cell extends to end of buffer. Empty cells
--- produce no region. Consumed by notebook/lsp.lua (diagnostic silencing)
--- and the markdown-cell formatter.
+-- produce no region. Delegated to core/cell_model.markdown_regions (the
+-- canonical cell model, F1); kept as the cell_engine API for existing
+-- consumers.
 function M.get_markdown_regions(bufnr)
 	vim.validate({ bufnr = { bufnr, "number", true } })
-	bufnr = bufnr or vim.api.nvim_get_current_buf()
-	local positions = M.get_cell_positions(bufnr)
-	local line_count = vim.api.nvim_buf_line_count(bufnr)
-	local regions = {}
-	for idx, marker_line in ipairs(positions) do
-		local marker_text = vim.api.nvim_buf_get_lines(bufnr, marker_line - 1, marker_line, false)[1] or ""
-		if marker_text:match("%[markdown%]") then
-			local start_line = marker_line + 1
-			local next_marker = positions[idx + 1]
-			local end_line = (next_marker and (next_marker - 1)) or line_count
-			if start_line <= end_line then
-				table.insert(regions, { start_line = start_line, end_line = end_line })
-			end
-		end
-	end
-	return regions
+	return require("pyworks.core.cell_model").markdown_regions(bufnr)
 end
 
 function M.is_markdown_cell()

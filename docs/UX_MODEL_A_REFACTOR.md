@@ -72,7 +72,7 @@ silence/highlight/formatter work — parts of it are superseded here (F5).
 
 ## Slices
 
-- [ ] **F1 — `core/cell_model.lua`**: canonical cells
+- [x] **F1 — `core/cell_model.lua`**: canonical cells
       `{index, marker_line, type, start_line, end_line, marker_text}` +
       `cell_at(bufnr, line)`, `markers(bufnr)`, `markdown_regions(bufnr)`,
       `for_buffer(bufnr)`; preamble (lines before first marker) = implicit

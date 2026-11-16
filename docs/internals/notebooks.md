@@ -78,8 +78,10 @@ both the python LSP and markdown rendering. Three modules now close that:
   buffers (identified by `b:pyworks_notebook_path`, fallback `%.ipynb$`
   buffer name) in mode `"silence"` it drops diagnostics whose start line
   falls in a markdown region (`cell_engine.get_markdown_regions`,
-  cell_engine.lua:96) and forwards everything else to the saved original
-  handler. Payloads are shallow-copied only when something is dropped.
+  cell_engine.lua:97 — a shim delegating to the canonical cell model,
+  `core/cell_model.lua:133` `markdown_regions`) and forwards everything
+  else to the saved original handler. Payloads are shallow-copied only when
+  something is dropped.
   Handler wrapping is idempotent via a weak-key registry (`wrapped_handlers`
   — functions can't carry flags in Lua 5.1). **Client-snapshot gotcha**:
   nvim snapshots `vim.lsp.handlers` at client start, so `install()` also

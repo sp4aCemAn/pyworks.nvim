@@ -58,6 +58,8 @@ lua/pyworks/init.lua      setup(), config validation/merge, user commands
   core/recursion_guard.lua  guards notebook :edit cascades (E132);
                           begin/end + force_reset + user command
   core/cell_engine.lua    cell boundaries/nav/insert/split/merge/run
+  core/cell_model.lua     canonical percent-buffer cell model (Model A F1):
+                          cells + cell_at/markers/markdown_regions/for_buffer
   notebook/jupytext.lua   BufReadCmd/BufWriteCmd for .ipynb ⇄ percent format
   notebook/lsp.lua        Notebook LSP modes: silence (publishDiagnostics
                           filter over markdown regions) / detach (LspAttach)
