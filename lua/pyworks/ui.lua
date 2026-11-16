@@ -124,9 +124,22 @@ function M.setup_cell_folding()
 end
 
 -- Fold expression for cells (marker lines open a fold; content continues
--- it). Marker check call-throughs the cell model (F3).
+-- it). Marker check call-throughs the cell model (F3). When
+-- notebooks.md_fold_default is on, markdown markers get fold level 2 while
+-- code markers stay at 1, so foldlevel=1 collapses only markdown cells
+-- (Model A F6). Default off -> unchanged ">1" at every marker.
 function M.cell_fold_expr()
-	if require("pyworks.core.cell_model").is_marker_line(0, vim.v.lnum) then
+	local cell_model = require("pyworks.core.cell_model")
+	if cell_model.is_marker_line(0, vim.v.lnum) then
+		-- Lazy require (same cycle-break as get_cell_pattern above)
+		local ok, pyworks = pcall(require, "pyworks")
+		local cfg = ok and pyworks.get_config and pyworks.get_config() or nil
+		if cfg and cfg.notebooks and cfg.notebooks.md_fold_default then
+			local cell = cell_model.cell_at(0, vim.v.lnum)
+			if cell and cell.type == "markdown" then
+				return ">2"
+			end
+		end
 		return ">1"
 	end
 

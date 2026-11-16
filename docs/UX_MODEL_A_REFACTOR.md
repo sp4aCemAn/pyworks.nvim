@@ -54,6 +54,86 @@ silence/highlight/formatter work — parts of it are superseded here (F5).
   feel across concealed `"# "`, interaction with Molten virt_text, cost of
   re-adding matches) and must record findings here/LMS before building.
 
+### F6 SPIKE findings (2026-11-16, executed before building — throwaway
+harness: msgpack-RPC driver attaching a real `ext_linegrid` UI to an
+embedded nvim 0.12.6 and reading rendered `grid_line`/`grid_cursor` events;
+plain headless probes are INCONCLUSIVE for rendering — `virtcol`/`screenpos`
+never reflect concealment with no UI attached, they silently return byte
+columns)
+
+1. **Line-range atoms**: `\%>=Nl`/`\%<=Nl` DO NOT EXIST (E867 NFA error at
+   matchadd — and a bad pattern in a matchadd dict-arg call fails SILENTLY
+   at draw time in some paths, so validate via `match()`/`search()` first).
+   Only exclusive `\%>Nl`/`\%<Nl`. Inclusive region `[s,e]` →
+   `\%>{s-1}l\%<{e+1}l`. Prefix: `^#\s\?` (covers `"# "`-commented and bare
+   `"#"` empty md lines).
+1b. **`^` anchor branch trap (bit us in review of my own first pattern)**:
+   `^` is a line anchor at pattern/`\|`-BRANCH start only when it LEADS the
+   branch. `\%>1l\%<4l^#\s\?\|\%>5l\%<8l^#\s\?` — branch 1 matches, branch 2
+   finds NOTHING (the `^` behaves as a literal). Same silent failure inside
+   `\%(...\)` wrappers (`\%(\%>1l\%<4l^#...` matches nothing). Correct
+   multi-region shape: **`^` first in every branch**:
+   `^#\s\?\%>1l\%<4l\|^#\s\?\%>5l\%<8l` — confirmed by a real
+   ext_linegrid render diffing every md line of BOTH regions plus the bare
+   `#` line (driver: attach `ext_linegrid` UI to `nvim --embed` child via
+   msgpack-RPC, read `grid_line` deltas; rows are 0-based; `nvim` sends
+   Buffer/Window as msgpack EXT → decodes as raw byte strings via plain
+   `vim.mpack`).
+1c. Plain headless probes CANNOT see concealment: `virtcol`/`screenpos`
+   return byte columns with no UI attached — a matchadd that silently
+   matches nothing looks identical to working concealment. Any future
+   presentation work must use the ext_linegrid driver, unit-assert the
+   pattern string + `getmatches()`, or eyeball a real session.
+2. **Conceal renders correctly**: with `conceallevel=3` + a matchadd
+   `{conceal=""}` (cchar-less = fully hidden), the rendered grid showed
+   `# # Title` → `Title` and `# body text` → `body text`; bare `#` → empty
+   line. Matched positions are simply not drawn (no width, no chars).
+3. **Cursor motion**: byte columns step THROUGH the hidden prefix — `l`
+   from col 1 lands on col 2 and 3 (both invisible with
+   `concealcursor="nvi"`). Feel = "ghost columns" at line start, the known
+   markview-class wart. Editing risk confirmed: `i<BS>` at the prefix
+   boundary silently deletes the `# ` space (md text semantics change while
+   invisible). Mitigation: `concealcursor="nvi"` — the cursor line is
+   never concealed (prefix reappears wherever the cursor is, in normal,
+   visual AND insert mode; 'i' listed is mandatory: text under the cursor
+   in UNLISTED modes stays hidden). Other md lines stay clean.
+4. **Molten virt_text coexists**: an eol `virt_text` extmark ("Out[1]: ✓
+   Done") rendered fine on a line whose prefix was concealed — concealment
+   shifts nothing, virt_text still appends after the (shifted) eol. No
+   conflict with extmark-based Molten output or pyworks_cell_numbers.
+5. **Re-add cost is negligible**: 25-50 full rebuilds of 60-80 regions
+   (clearmatches + matchadd/matchaddpos, both single `|`-alternation and
+   per-region ids) measured 0 ms — debounce is still worthwhile, but cost
+   is a non-issue. Multi-region in ONE matchadd via `\%(...\)\|%(...\)`
+   alternation verified rendering correctly (one id to manage/replace).
+6. **`matchaddpos`** accepts >8 position tuples in 0.12 (no legacy cap) —
+   but positions are dead coordinates (stale after edits); pattern ranges
+   stay live across scroll, only go stale on line-count edits. Chosen:
+   one pattern-match, rebuild on debounce.
+7. **Folds coexist** with conceal (foldmethod=expr + matchadd in same
+   window: fine). `md_fold_default` (collapse md cells on open) builds on
+   this: foldexpr already marks folds at markers; need per-fold close,
+   which requires knowing md fold extents → cell model (F1) gives them.
+8. Window-scoped: matches are per-window (`clearmatches()` hits the
+   current window only) → attach per notebook window on WinNew/BufWinEnter
+   with conceallevel/concealcursor set alongside.
+
+### F6 build decisions (from spike)
+
+- One buffer-global pattern (`\|`-joined branches, each `^#\s\?\%>{s-1}l\
+  \%<{e+1}l` — `^` leads every branch, spike #1b) over the markdown regions
+  from `cell_model.markdown_regions` + ONE matchadd id per window; rebuild
+  debounced 150ms on changes, immediate on BufWinEnter/WinEnter;
+  `matchdelete` + re-add via stable id.
+- Window options on notebook buffers only: `conceallevel=2`,
+  `concealcursor="nvi"` (spike #3: in normal/visual/insert the char under
+  the cursor is un-concealed so you can reach/edit the prefix; other lines
+  stay clean; 'i' is mandatory for insert-mode safety).
+- `notebooks.md_conceal` (default true) gates the whole module;
+  `notebooks.md_fold_default` (default false) closes md folds on open.
+- Escape hatch: `:PyworksMdConceal` toggle? No — config option suffices
+  (single-buffer doctrine, minimal surface). Users toggle via setup().
+
 ### pylsp/pyflakes payload shape (informs F4/F6 filters)
 
 - Whole-file parse failure → single `invalid syntax` diagnostic at the
@@ -101,7 +181,7 @@ silence/highlight/formatter work — parts of it are superseded here (F5).
 - [x] **F5 — remove `notebook/markdown_hl.lua` + `notebooks.markdown_highlight`**
       (+ spec, docs, CHANGELOG [Unreleased] fix-note). Commit message cites
       this file's dead-end section.
-- [ ] **F6 — `notebook/md_view.lua`**: inline `# ` concealment via
+- [x] **F6 — `notebook/md_view.lua`**: inline `# ` concealment via
       matchadd-range trick; `notebooks.md_conceal = true` default, new
       option `notebooks.md_fold_default` (collapse md cells on open — the
       surviving half of old S11). SPIKE FIRST (see facts above); document

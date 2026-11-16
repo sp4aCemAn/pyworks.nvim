@@ -309,6 +309,10 @@ All settings are optional. Here are the available options with their defaults:
                                     --   "attach": status quo
         md_formatter = { "pandoc", "-f", "gfm", "-t", "markdown" },
                                     -- argv for :PyworksFormatMarkdownCell
+        md_conceal = true,          -- hide the markdown "# " comment prefix
+                                    --   inline (cursor line always shows it)
+        md_fold_default = false,    -- open notebooks with markdown cells
+                                    --   folded (code cells stay expanded)
       },
 
       -- Auto-detection
@@ -377,16 +381,21 @@ Q: Notebooks won't reload or appear stuck
 A: The reload guard may be stuck. Run |:PyworksResetReloadGuard| to reset.
 
 Q: Python LSP reports syntax errors / bogus warnings inside notebooks
-A: Percent scripts store markdown cell bodies as raw text (invalid Python).
-   By default pyworks drops diagnostics pointing inside markdown cells
+A: A raw (uncommented) markdown line — typed mid-session or in a
+   non-canonical percent file — is invalid Python and pylsp's whole-file
+   "invalid syntax" cascades into bogus warnings across real cells. By
+   default pyworks drops diagnostics pointing inside markdown cells
    (notebooks.lsp = "silence") while keeping completion. Remaining
    cell-order lint (E402, redefinitions) is a rule choice — ignore those
    codes in your pylsp project config, or use notebooks.lsp = "detach".
 
 Q: Markdown cells don't look like markdown
-A: Notebook buffers are filetype=python, so markdown cell content renders
-   as comments. For richer styling (headings, bold), use markview.nvim —
-   it renders jupytext percent cells natively and composes with pyworks.
+A: By default (notebooks.md_conceal = true) pyworks hides the jupytext "# "
+   comment prefix on markdown cell lines so they read as plain markdown; the
+   line your cursor is on always shows the real prefix. Set md_conceal =
+   false for raw editing. For richer styling (headings, bold), use
+   markview.nvim — it renders jupytext percent cells natively and composes
+   with pyworks.
 
 DEBUG MODE~
 

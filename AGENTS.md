@@ -63,9 +63,11 @@ lua/pyworks/init.lua      setup(), config validation/merge, user commands
   notebook/jupytext.lua   BufReadCmd/BufWriteCmd for .ipynb ⇄ percent format
   notebook/lsp.lua        Notebook LSP modes: silence (publishDiagnostics
                           filter over markdown regions) / detach (LspAttach)
+  notebook/md_view.lua    inline md concealment (window-local matchadd
+                          ranges over cell-model regions; F6)
   notebook/percent_md.lua jupytext percent markdown comment/uncomment codec
   keymaps.lua             <leader>j* / <leader>m* maps; run-all via
-                          Molten extmark polling
+                          cell-model ranges + Molten extmark polling
   ui.lua                  cell numbering virt-text, folding, float windows
   dependencies.lua        lazy-nvim dep checks, image backend detection
   diagnostics.lua / health.lua   :PyworksDiagnostics / :checkhealth pyworks
@@ -85,11 +87,20 @@ pattern if you touch either module.
 
 ## Gotchas (each one has burned us before)
 
-- **Never hardcode `# %%`.** Use `cell_engine.get_cell_pattern()` (Lua
-  pattern, e.g. for `line:match`) or `cell_engine.vim_search_pattern()`
-  (vim regex, e.g. for `vim.fn.search`). They differ — `vim.pesc` applies
-  only to the Lua one. Custom markers (e.g. `# COMMAND ----------`) are a
-  supported config.
+- **Never hardcode `# %%`.** Prefer `core/cell_model.lua` for cell
+  structure (ranges/types) over hand-rolled marker scans (F1-F3). When you
+  must scan, use `cell_engine.get_cell_pattern()` (Lua pattern, e.g. for
+  `line:match`) or `cell_engine.vim_search_pattern()` (vim regex, e.g. for
+  `vim.fn.search`). They differ — `vim.pesc` applies only to the Lua one.
+  Custom markers (e.g. `# COMMAND ----------`) are a supported config.
+- **Markdown concealment regex (`notebook/md_view.lua`):** in a
+  multi-region vim regex, `^` is only a line anchor when it LEADS each
+  `\|` branch — `\%>1l\%<4l^#\s\?\|\%>5l...` silently matches nothing past
+  the first branch (and `\%(...\)` wrapping has the same trap). Use
+  `^#\s\?\%>Nl\%<Ml` per branch. Inclusive `\%>=`/`\%<=` do NOT exist
+  (E867). Concealment is invisible to headless `virtcol`/`screenpos`
+  without a real UI — assert the pattern string + `getmatches()`, or drive
+  an `ext_linegrid` UI. Spike detail: `docs/UX_MODEL_A_REFACTOR.md`.
 - **Molten namespace must match `"molten-extmarks"` exactly.** Never use a
   `^molten` prefix match: Lua table iteration order is nondeterministic and
   `molten-highlights` will sometimes win, causing 30s cell timeouts

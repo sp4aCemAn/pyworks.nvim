@@ -65,6 +65,8 @@ local default_config = {
 		-- "detach": fully detach LSP clients from notebook buffers;
 		-- "attach": status quo (server sees raw markdown as broken Python)
 		md_formatter = { "pandoc", "-f", "gfm", "-t", "markdown" }, -- argv for formatting markdown cell content
+		md_conceal = true, -- hide the markdown "# " comment prefix inline (matchadd concealment)
+		md_fold_default = false, -- collapse markdown cells when a notebook opens (needs folding)
 	},
 }
 
@@ -125,6 +127,12 @@ local function validate_config(user_opts)
 			if type(user_opts.notebooks.lsp) ~= "string" or not valid_lsp_modes[user_opts.notebooks.lsp] then
 				table.insert(warnings, "notebooks.lsp should be one of 'silence', 'detach', 'attach'")
 			end
+		end
+		if user_opts.notebooks.md_conceal ~= nil and type(user_opts.notebooks.md_conceal) ~= "boolean" then
+			table.insert(warnings, "notebooks.md_conceal should be boolean")
+		end
+		if user_opts.notebooks.md_fold_default ~= nil and type(user_opts.notebooks.md_fold_default) ~= "boolean" then
+			table.insert(warnings, "notebooks.md_fold_default should be boolean")
 		end
 		if user_opts.notebooks.md_formatter ~= nil then
 			local formatter = user_opts.notebooks.md_formatter
@@ -290,6 +298,9 @@ function M.setup(opts)
 
 	-- Notebook-aware LSP diagnostics handling ("silence"/"attach")
 	require("pyworks.notebook.lsp").install()
+
+	-- Inline markdown concealment chrome for notebook windows (Model A F6)
+	require("pyworks.notebook.md_view").setup()
 
 	-- Initialize state (load persistent data, then start session)
 	local state = require("pyworks.core.state")

@@ -265,6 +265,11 @@ require("pyworks").setup({
     md_formatter = { "pandoc", "-f", "gfm", "-t", "markdown" },
                                 -- argv used by :PyworksFormatMarkdownCell /
                                 -- <leader>jfm; any stdin->stdout formatter works
+    md_conceal = true,          -- hide the markdown "# " comment prefix inline
+                                -- (the cursor line always shows it, so editing
+                                -- stays honest)
+    md_fold_default = false,    -- open notebooks with markdown cells folded
+                                -- (code cells stay expanded)
   },
 
   -- Auto-detection
@@ -346,6 +351,7 @@ plugin/pyworks.lua          Entry point: autocmds (FileType, BufWinEnter, Sessio
       ├── notebook/
       │   ├── jupytext.lua       .ipynb read/write via jupytext CLI
       │   ├── lsp.lua            Notebook-aware LSP diagnostics (silence/detach)
+      │   ├── md_view.lua        Inline markdown concealment (matchadd ranges)
       │   └── percent_md.lua     jupytext percent markdown comment codec
       └── commands/
           ├── create.lua         :PyworksNewPython, :PyworksNewPythonNotebook
@@ -394,7 +400,7 @@ ignore = ["E402", "E501"]
 Escape hatches: `notebooks.lsp = "detach"` (no LSP clients at all on notebook buffers) or `"attach"` (raw status quo).
 
 **Q: Markdown cells don't look like markdown**
-A: Notebook buffers are `filetype=python`, so markdown cell content renders as comments. For richer styling (headings, bold, inline images), use [markview.nvim](https://github.com/OXY2CREATIONS/markview.nvim) — it renders jupytext percent cells natively and composes cleanly with pyworks.
+A: By default (`notebooks.md_conceal = true`) pyworks hides the jupytext `# ` comment prefix on markdown cell lines, so they read as plain markdown; the line your cursor sits on always shows the real prefix, and `md_conceal = false` restores raw editing. For richer styling (headings, bold, inline images) use [markview.nvim](https://github.com/OXY2CREATIONS/markview.nvim) — it renders jupytext percent cells natively and composes cleanly with pyworks.
 
 **Q: `<leader>jfm` warns that the markdown formatter is missing**
 A: The default formatter is `pandoc`. Install it, or point `notebooks.md_formatter` at any stdin→stdout markdown formatter, e.g. `{ "prettier", "--parser", "markdown" }`.

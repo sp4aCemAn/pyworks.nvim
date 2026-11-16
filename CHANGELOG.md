@@ -24,6 +24,17 @@ All notable changes to pyworks.nvim will be documented in this file.
   markdown cell content). Invalid values warn without crashing.
   Lists use replace semantics on merge (no `tbl_deep_extend` index-merge
    tail leak).
+- **Inline markdown concealment** (`notebooks.md_conceal`, default true):
+  notebook buffers now hide the jupytext `# ` comment prefix on markdown
+  cell content lines via window-local `matchadd` ranges recomputed from the
+  canonical cell model (debounced), so md cells read as plain markdown while
+  the buffer stays a valid percent script; the line under the cursor always
+  shows the real prefix (`concealcursor=nvi`), and `md_conceal = false`
+  restores raw editing. New `notebooks.md_fold_default` (default false)
+  opens notebooks with markdown cells folded and code cells expanded.
+  Built on a throwaway spike verified against a real `ext_linegrid` render
+  (findings incl. the `^`-must-lead-each-`\|`-branch regex trap:
+  docs/UX_MODEL_A_REFACTOR.md). Model A refactor F6.
 - **`:PyworksFormatMarkdownCell` / `<leader>jfm`**: runs the configured
   `notebooks.md_formatter` (argv, default `pandoc -f gfm -t markdown`) over
   the markdown cell under the cursor and replaces its content with the
