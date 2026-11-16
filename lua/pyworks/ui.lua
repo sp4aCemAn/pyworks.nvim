@@ -67,27 +67,17 @@ function M.mark_cell_cleared(cell_num)
 	M.number_cells()
 end
 
--- Get current cell number (for marking as executed)
+-- Get current cell number (for marking as executed); 0 in the preamble or
+-- a markerless buffer. Call-through to the canonical cell model (F3).
 function M.get_current_cell_number()
-	local cursor_pos = vim.api.nvim_win_get_cursor(0)
-	local current_line = cursor_pos[1]
-
-	-- Count cells up to cursor position
-	local lines = vim.api.nvim_buf_get_lines(0, 0, current_line, false)
-	local pattern = get_cell_pattern()
-	local cell_num = 0
-	for _, line in ipairs(lines) do
-		if line:match(pattern) then
-			cell_num = cell_num + 1
-		end
-	end
-	return cell_num
+	local cell = require("pyworks.core.cell_model").cell_at(0)
+	return cell and cell.index or 0
 end
 
--- Add virtual text numbering to cells with execution status
+-- Add virtual text numbering to cells with execution status. Positions and
+-- types come from the canonical cell model (F3).
 function M.number_cells()
 	local bufnr = vim.api.nvim_get_current_buf()
-	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 
 	-- Get or create namespace (cached for performance)
 	if not cell_numbers_ns then
@@ -100,25 +90,17 @@ function M.number_cells()
 	-- Get executed cells for this buffer
 	local executed = M.executed_cells[bufnr] or {}
 
-	-- Find and number all cells
-	local pattern = get_cell_pattern()
-	local cell_num = 1
-	for i, line in ipairs(lines) do
-		if line:match(pattern) then
-			local is_markdown = line:match("%[markdown%]")
-			local cell_type = is_markdown and "markdown" or "code"
+	for _, cell in ipairs(require("pyworks.core.cell_model").markers(bufnr)) do
+		local cell_type = cell.type == "markdown" and "markdown" or "code"
 
-			-- Use green if executed, red if not
-			local hl_group = executed[cell_num] and "PyworksCellNumberExecuted" or "PyworksCellNumberUnrun"
-			local virt_text = { { string.format(" [Cell %d: %s]", cell_num, cell_type), hl_group } }
+		-- Use green if executed, red if not
+		local hl_group = executed[cell.index] and "PyworksCellNumberExecuted" or "PyworksCellNumberUnrun"
+		local virt_text = { { string.format(" [Cell %d: %s]", cell.index, cell_type), hl_group } }
 
-			vim.api.nvim_buf_set_extmark(bufnr, cell_numbers_ns, i - 1, 0, {
-				virt_text = virt_text,
-				virt_text_pos = "eol",
-			})
-
-			cell_num = cell_num + 1
-		end
+		vim.api.nvim_buf_set_extmark(bufnr, cell_numbers_ns, cell.marker_line - 1, 0, {
+			virt_text = virt_text,
+			virt_text_pos = "eol",
+		})
 	end
 end
 
@@ -141,12 +123,10 @@ function M.setup_cell_folding()
 	vim.wo.foldtext = "v:lua.require('pyworks.ui').cell_fold_text()"
 end
 
--- Fold expression for cells
+-- Fold expression for cells (marker lines open a fold; content continues
+-- it). Marker check call-throughs the cell model (F3).
 function M.cell_fold_expr()
-	local line = vim.fn.getline(vim.v.lnum)
-
-	-- Start a new fold at each cell marker
-	if line:match(get_cell_pattern()) then
+	if require("pyworks.core.cell_model").is_marker_line(0, vim.v.lnum) then
 		return ">1"
 	end
 
@@ -158,10 +138,10 @@ end
 function M.cell_fold_text()
 	local foldstart = vim.v.foldstart
 	local foldend = vim.v.foldend
-	local line = vim.fn.getline(foldstart)
 
-	-- Determine cell type
-	local cell_type = line:match("%[markdown%]") and "Markdown" or "Code"
+	-- Determine cell type via the cell model (F3)
+	local cell = require("pyworks.core.cell_model").cell_at(0, foldstart)
+	local cell_type = (cell and cell.type == "markdown") and "Markdown" or "Code"
 
 	-- Count lines in fold
 	local line_count = foldend - foldstart + 1

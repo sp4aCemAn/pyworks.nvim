@@ -62,13 +62,16 @@ silence/highlight/formatter work — parts of it are superseded here (F5).
   resolve via `vim.uri_to_bufnr(result.uri)` (pattern exists in
   `notebook/lsp.lua` `resolve_bufnr`, commit S9). Keep it.
 
-### Known bug F3 kills
+### Known bug F3 kills — FIXED (F3)
 
 - `keymaps.lua` run-all: `search(pat, "bnW")` with cursor ON a marker line
-  returns the PREVIOUS marker ("c" flag missing) → executed ranges shift by
+  returned the PREVIOUS marker ("c" flag missing) → executed ranges shift by
   one cell → adjacent cells double-execute, `[markdown]` skip checks the
   wrong cell. `cell_engine.lua` uses correct `"bcnW"`. After F3 all
   ranges come from the cell model and the failure mode disappears.
+  F3 landed: run-all snapshots `cell_model.markers`, evaluates exact
+  `[start_line,end_line]`; regression test in keymaps_spec asserts
+  cursor-position independence + each code cell once + md skipped by type.
 
 ## Slices
 
@@ -85,7 +88,7 @@ silence/highlight/formatter work — parts of it are superseded here (F5).
       property tests (incl. `"## h1"` stability); golden-file tests only if
       a runnable jupytext exists in the environment (skip otherwise —
       container has it).
-- [ ] **F3 — migrate consumers to F1**: run-all (fixes bnW bug),
+- [x] **F3 — migrate consumers to F1**: run-all (fixes bnW bug),
       `is_markdown_cell` (drop keymaps-local copy), `find_cell_boundaries`,
       numbering/folds call-through. Acceptance: new specs assert each cell
       executed exactly once and markdown skipped by TYPE not cursor trick;

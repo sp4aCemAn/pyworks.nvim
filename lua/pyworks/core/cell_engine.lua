@@ -33,58 +33,27 @@ local function vim_search_pattern()
 	return M.vim_search_pattern()
 end
 
+-- Content range of the cell under the cursor (markers excluded; cursor ON a
+-- marker line selects the cell it opens). nil, nil for empty cells.
+-- Call-through to the canonical cell model (F3).
 function M.find_cell_boundaries()
-	local pattern = vim_search_pattern()
-	local cell_start = vim.fn.search(pattern, "bcnW")
-	local cell_end = vim.fn.search(pattern, "nW")
-
-	local start_line, end_line
-
-	if cell_start == 0 and cell_end == 0 then
-		start_line = 1
-		end_line = vim.fn.line("$")
-	elseif cell_start == 0 then
-		start_line = 1
-		end_line = cell_end - 1
-	elseif cell_end == 0 then
-		start_line = cell_start + 1
-		end_line = vim.fn.line("$")
-	else
-		start_line = cell_start + 1
-		end_line = cell_end - 1
-	end
-
-	if start_line > end_line then
+	local cell = require("pyworks.core.cell_model").cell_at(0)
+	if not cell or cell.start_line > cell.end_line then
 		return nil, nil
 	end
-
-	return start_line, end_line
+	return cell.start_line, cell.end_line
 end
 
 function M.count_cells(bufnr)
 	vim.validate({ bufnr = { bufnr, "number", true } })
-	bufnr = bufnr or vim.api.nvim_get_current_buf()
-	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-	local pattern = M.get_cell_pattern()
-	local count = 0
-	for _, line in ipairs(lines) do
-		if line:match(pattern) then
-			count = count + 1
-		end
-	end
-	return count
+	return #require("pyworks.core.cell_model").markers(bufnr)
 end
 
 function M.get_cell_positions(bufnr)
 	vim.validate({ bufnr = { bufnr, "number", true } })
-	bufnr = bufnr or vim.api.nvim_get_current_buf()
-	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-	local pattern = M.get_cell_pattern()
 	local positions = {}
-	for i, line in ipairs(lines) do
-		if line:match(pattern) then
-			table.insert(positions, i)
-		end
+	for _, cell in ipairs(require("pyworks.core.cell_model").markers(bufnr)) do
+		table.insert(positions, cell.marker_line)
 	end
 	return positions
 end
@@ -99,14 +68,11 @@ function M.get_markdown_regions(bufnr)
 	return require("pyworks.core.cell_model").markdown_regions(bufnr)
 end
 
+-- True when the cursor is inside (or on the marker of) a markdown cell.
+-- Type comes from the cell model (F3) — no cursor-position marker search.
 function M.is_markdown_cell()
-	local pattern = vim_search_pattern()
-	local cell_start = vim.fn.search(pattern, "bcnW")
-	if cell_start == 0 then
-		return false
-	end
-	local line = vim.fn.getline(cell_start)
-	return line:match("%[markdown%]") ~= nil
+	local cell = require("pyworks.core.cell_model").cell_at(0)
+	return cell ~= nil and cell.type == "markdown"
 end
 
 function M.next_cell()

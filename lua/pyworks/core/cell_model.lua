@@ -127,6 +127,21 @@ function M.cell_at(bufnr, line)
 	return nil
 end
 
+-- Cheap single-line marker test for fold expressions (which run per line;
+-- full structure always comes from for_buffer).
+function M.is_marker_line(bufnr, line)
+	vim.validate({
+		bufnr = { bufnr, "number", true },
+		line = { line, "number" },
+	})
+	bufnr = resolve_bufnr(bufnr)
+	local lines = vim.api.nvim_buf_get_lines(bufnr, line - 1, line, false)
+	if #lines == 0 then
+		return false
+	end
+	return lines[1]:match(get_cell_engine().get_cell_pattern()) ~= nil
+end
+
 -- Content-line ranges of markdown cells (markers excluded, empty cells
 -- produce no region, final cell extends to EOF). Source of truth for the
 -- notebook LSP silencer and the markdown-cell formatter.

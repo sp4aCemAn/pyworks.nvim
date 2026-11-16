@@ -93,6 +93,15 @@ All notable changes to pyworks.nvim will be documented in this file.
 
 ### Fixed
 
+- **Run-all (`<leader>jR`) double-executed adjacent cells**: the old
+  implementation navigated with cursor-relative marker searches
+  (`search(pattern, "bnW")`, missing the `c` flag) — with the cursor ON a
+  marker line the search returned the PREVIOUS marker, shifting every
+  executed range by one cell and checking the wrong cell for the
+  `[markdown]` skip. Run-all now derives its cell list and ranges from the
+  canonical cell model (`core/cell_model.lua`): each code cell executes
+  exactly once, markdown cells are skipped by type, and numbering, folds,
+  and boundary queries call through the same model (Model A refactor F3).
 - **Silence mode leaked diagnostics on Neovim >= 0.12** (real-world repro
   with pylsp): for `publishDiagnostics`, newer core passes `ctx.bufnr =
   nil` and lets the handler resolve the buffer from the payload URI. The

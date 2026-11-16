@@ -305,14 +305,11 @@ local function wait_for_cell_completion(bufnr, callback)
 	)
 end
 
--- Check if current cell is a markdown cell (no executable code)
+-- Thin delegate kept only for the M._is_markdown_cell test hook: the
+-- keymaps-local cursor-search copy is gone (F3); the canonical check is
+-- cell_engine.is_markdown_cell -> core.cell_model.
 local function is_markdown_cell()
-	local cell_start = vim.fn.search(cell_pattern(), "bnW")
-	if cell_start == 0 then
-		return false
-	end
-	local line = vim.fn.getline(cell_start)
-	return line:match("%[markdown%]") ~= nil
+	return get_cell_engine().is_markdown_cell()
 end
 
 -- Suppress Molten events during navigation (workaround for Molten extmark bug)
@@ -325,53 +322,6 @@ local function with_suppressed_events(fn)
 	if not ok then
 		error(err)
 	end
-end
-
--- Helper function to find and execute code between cell markers
--- This creates a Molten cell if one doesn't exist yet
--- Returns start_line, end_line of the executed cell (or nil if empty/error)
-local function evaluate_percent_cell()
-	-- Find cell boundaries
-	local cell_start = vim.fn.search(cell_pattern(), "bnW") -- Search backwards for cell start
-	local cell_end = vim.fn.search(cell_pattern(), "nW") -- Search forwards for next cell start
-
-	local start_line, end_line
-
-	if cell_start == 0 and cell_end == 0 then
-		-- No cell markers found, evaluate entire file
-		start_line = 1
-		end_line = vim.fn.line("$")
-	elseif cell_start == 0 then
-		-- Before first cell marker, select from start to line before first marker
-		start_line = 1
-		end_line = cell_end - 1
-	elseif cell_end == 0 then
-		-- After last cell marker, select from line after marker to end
-		start_line = cell_start + 1
-		end_line = vim.fn.line("$")
-	else
-		-- Between markers: from line after first marker to line before next marker
-		start_line = cell_start + 1
-		end_line = cell_end - 1
-	end
-
-	-- Ensure we have valid content to execute (not just empty lines or markers)
-	if start_line > end_line then
-		vim.notify("Empty cell", vim.log.levels.WARN)
-		return nil, nil
-	end
-
-	-- Use MoltenEvaluateRange function (more reliable than visual mode simulation)
-	-- This is a Vim function exposed by Molten, not a command
-	local ok = pcall(vim.fn.MoltenEvaluateRange, start_line, end_line)
-	if not ok then
-		-- Fallback: set visual marks and run MoltenEvaluateVisual
-		vim.fn.setpos("'<", { 0, start_line, 1, 0 })
-		vim.fn.setpos("'>", { 0, end_line, vim.fn.col({ end_line, "$" }) - 1, 0 })
-		pcall(vim.cmd, "'<,'>MoltenEvaluateVisual")
-	end
-
-	return start_line, end_line
 end
 
 -- Set up keymaps for a buffer
@@ -457,17 +407,28 @@ function M.setup_buffer_keymaps()
 		-- ============================================================================
 		-- RUN ALL CELLS (<leader>jR)
 		-- ============================================================================
-		-- Executes all cells in the buffer sequentially, waiting for each to complete.
+		-- Executes all marker cells in the buffer sequentially, waiting for each
+		-- to complete.
 		--
-		-- HOW IT WORKS:
-		-- 1. Count all cell markers in the buffer
-		-- 2. Start recursive execution with run_next_cell(1)
-		-- 3. For each cell:
-		--    a. Navigate to the cell (search from line 1, N times for cell N)
-		--    b. Execute the cell code via Molten
-		--    c. Poll for completion by watching Molten's extmarks for "Out[N]: ✓ Done"
-		--    d. On completion (or 30s timeout), proceed to next cell
-		-- 4. When all cells done, position cursor at last cell
+		-- HOW IT WORKS (F3 — cell-model driven):
+		-- 1. Snapshot the canonical cells from core/cell_model (markers only;
+		--    the preamble never runs, matching historical behavior).
+		-- 2. For each cell in order:
+		--    a. markdown cells are skipped by TYPE, empty cells by range;
+		--    b. code cells dispatch via MoltenEvaluateRange over the cell's
+		--       exact content range [start_line, end_line];
+		--    c. completion is polled from Molten's extmarks for
+		--       "Out[N]: ✓ Done" (see COMPLETION DETECTION below);
+		--    d. on completion (or 30s timeout), proceed to the next cell.
+		-- 3. When all cells are done, position the cursor at the last cell.
+		--
+		-- Why the model: the pre-F3 implementation navigated with
+		-- vim.fn.search(pattern, "bnW")/cursor tricks; with the cursor ON a
+		-- marker line the missing "c" flag returned the PREVIOUS marker, so
+		-- ranges shifted by one cell — adjacent cells double-executed and the
+		-- [markdown] skip checked the wrong cell (known bug in
+		-- docs/UX_MODEL_A_REFACTOR.md; the ranges now come from the model and
+		-- the failure mode is structurally gone).
 		--
 		-- COMPLETION DETECTION:
 		-- - Molten displays output as virtual text in the "molten-extmarks" namespace
@@ -488,99 +449,77 @@ function M.setup_buffer_keymaps()
 				return
 			end
 
-			-- Step 1: Count all cells in the buffer
-			local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-			local cell_count = 0
-			for _, line in ipairs(lines) do
-				if line:match(get_cell_engine().get_cell_pattern()) then
-					cell_count = cell_count + 1
-				end
+			-- Step 1: canonical cells from the model (marker cells only)
+			local cells = {}
+			for _, cell in ipairs(require("pyworks.core.cell_model").markers(bufnr)) do
+				table.insert(cells, cell)
 			end
 
-			if cell_count == 0 then
+			if #cells == 0 then
 				vim.notify("No cells found in buffer", vim.log.levels.WARN)
 				return
 			end
 
-			vim.notify(string.format("Running %d cells...", cell_count), vim.log.levels.INFO)
+			vim.notify(string.format("Running %d cells...", #cells), vim.log.levels.INFO)
 
-			-- Step 2: Position cursor at buffer start
-			-- Use API call (not normal!) to work from any mode including terminal
-			-- Suppress events to prevent Molten's CursorMoved handlers from interfering
-			with_suppressed_events(function()
-				vim.api.nvim_win_set_cursor(0, { 1, 0 })
-			end)
-
-			-- Step 3: Recursive function to execute cells one by one
+			-- Step 2: recursive function to execute cells one by one
 			-- Each call handles one cell, then schedules the next via vim.defer_fn
-			local function run_next_cell(cell_num)
-				-- Base case: all cells executed
-				if cell_num > cell_count then
-					-- Position cursor at the last cell for user convenience
+			local function run_next_cell(i)
+				local function schedule_next()
+					vim.defer_fn(function()
+						run_next_cell(i + 1)
+					end, BUFFER_SETTLE_DELAY_MS)
+				end
+
+				-- Base case: all cells handled — park the cursor at the last one
+				if i > #cells then
 					with_suppressed_events(function()
-						local last_line = vim.api.nvim_buf_line_count(0)
-						vim.api.nvim_win_set_cursor(0, { last_line, 0 })
+						ui.enter_cell(cells[#cells].marker_line, { insert_mode = false })
 					end)
-					local last_cell_line = vim.fn.search(cell_pattern(), "bW")
-					if last_cell_line > 0 then
-						ui.enter_cell(last_cell_line, { insert_mode = false })
-					end
 					vim.notify("All cells executed", vim.log.levels.INFO)
 					return
 				end
 
-				-- Navigate to target cell: go to line 1, then search forward N times
-				-- This ensures we always find the Nth cell regardless of cursor position
-				with_suppressed_events(function()
-					vim.api.nvim_win_set_cursor(0, { 1, 0 })
-					for _ = 1, cell_num do
-						vim.fn.search(cell_pattern(), "W")
-					end
-				end)
+				local cell = cells[i]
+				ui.mark_cell_executed(cell.index)
 
-				-- Skip markdown cells (no executable code, no output expected)
-				if is_markdown_cell() then
-					ui.mark_cell_executed(cell_num)
-					vim.defer_fn(function()
-						run_next_cell(cell_num + 1)
-					end, BUFFER_SETTLE_DELAY_MS)
+				-- Skip markdown (no executable code) and empty cells (by range)
+				if cell.type == "markdown" or cell.start_line > cell.end_line then
+					schedule_next()
 					return
 				end
 
-				-- Execute the cell
-				ui.mark_cell_executed(cell_num)
-				local cell_start, _ = evaluate_percent_cell()
+				-- Execute the cell over its exact model range
+				local ok = pcall(vim.fn.MoltenEvaluateRange, cell.start_line, cell.end_line)
+				if not ok then
+					vim.fn.setpos("'<", { 0, cell.start_line, 1, 0 })
+					vim.fn.setpos("'>", { 0, cell.end_line, vim.fn.col({ cell.end_line, "$" }) - 1, 0 })
+					pcall(vim.cmd, "'<,'>MoltenEvaluateVisual")
+				end
 
 				-- Move cursor to next cell for visual feedback (output appears above)
-				local next_cell_line = vim.fn.search(cell_pattern(), "nW")
-				if next_cell_line > 0 then
-					ui.enter_cell(next_cell_line, { insert_mode = false })
+				local next_cell = cells[i + 1]
+				if next_cell then
+					with_suppressed_events(function()
+						ui.enter_cell(next_cell.marker_line, { insert_mode = false })
+					end)
 				end
 
-				if cell_start then
-					-- Wait for completion by polling Molten's extmarks
-					-- Looks for "Out[N]: ✓ Done" pattern to detect when cell finishes
-					wait_for_cell_completion(bufnr, function(success, reason)
-						if not success and reason == "timeout" then
-							vim.notify(
-								string.format("Cell %d timed out after 30s, continuing...", cell_num),
-								vim.log.levels.WARN
-							)
-						end
-						-- Small delay to let output render, then continue to next cell
-						vim.defer_fn(function()
-							run_next_cell(cell_num + 1)
-						end, BUFFER_SETTLE_DELAY_MS)
-					end)
-				else
-					-- Empty cell, skip to next
-					vim.defer_fn(function()
-						run_next_cell(cell_num + 1)
-					end, BUFFER_SETTLE_DELAY_MS)
-				end
+				-- Wait for completion by polling Molten's extmarks
+				-- Looks for "Out[N]: ✓ Done" pattern to detect when cell finishes
+				wait_for_cell_completion(bufnr, function(success, reason)
+					if not success and reason == "timeout" then
+						vim.notify(
+							string.format("Cell %d timed out after 30s, continuing...", cell.index),
+							vim.log.levels.WARN
+						)
+					end
+					-- Small delay to let output render, then continue to next cell
+					schedule_next()
+				end)
 			end
 
-			-- Start execution from cell 1
+			-- Start execution from the first marker cell
 			run_next_cell(1)
 		end, vim.tbl_extend("force", opts, { desc = "Run all cells" }))
 
@@ -595,7 +534,7 @@ function M.setup_buffer_keymaps()
 				return
 			end
 
-			local has_cells = vim.fn.search(cell_pattern(), "nw") > 0
+			local has_cells = get_cell_engine().count_cells(0) > 0
 			local last_line = vim.api.nvim_buf_line_count(0)
 
 			local start_line, end_line

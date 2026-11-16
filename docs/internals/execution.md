@@ -43,25 +43,36 @@ before running the user cell (test/env/e2e_smoke.lua) and documents the
 upstream interaction; a plugin-side fix (serialize ready-hook evals) is an
 open thread (docs/LMS.md).
 
-## Cell ops (core/cell_engine.lua)
+## Cell ops (core/cell_engine.lua + core/cell_model.lua)
 
-Boundaries via cursor-position searches (find_cell_boundaries line 29:
-`"bcnW"` backward marker + `"nW"` next), insert/split/merge/toggle = pure
-buffer edits around the configured marker (line 9-27: `get_cell_pattern` is
-the Lua-pattern form, `vim_search_pattern` the Vim-regex form — never
-hardcode `# %%`). run_cell (line 211): flag → boundaries →
+Structure comes from the canonical cell model (F1/F3): `cell_model.for_buffer`
+(core/cell_model.lua:54) builds `{index, marker_line, type, start_line,
+end_line, marker_text}` cells (preamble = implicit cell 0);
+`cell_model.markers` (:99) / `cell_at` (:114) / `is_marker_line` (:132) /
+`markdown_regions` (:148). cell_engine keeps its API as call-throughs:
+find_cell_boundaries (cell_engine.lua:39) = `cell_at(cursor).start/end`
+(nil,nil when empty), count_cells (:47), get_cell_positions (:52),
+is_markdown_cell (:73) by TYPE. insert/split/merge/toggle = pure buffer edits
+around the configured marker (lines 14-27: `get_cell_pattern` is the
+Lua-pattern form, `vim_search_pattern` the Vim-regex form — never hardcode
+`# %%`). run_cell (line 194): flag → boundaries →
 `vim.fn.MoltenEvaluateRange(s, e)` with visual-mark fallback.
 
 ## Run-all + completion polling (keymaps.lua) — THE FRAGILE PART
 
-`<leader>jR` (line 484) executes cells sequentially: navigate →
-`evaluate_percent_cell` (line 333) → `wait_for_cell_completion` (line 232)
-polls every 150ms (line 25) up to 30s (line 26), detecting completion by
+`<leader>jR` (line 445) executes cells sequentially from the cell model:
+snapshot `cell_model.markers(bufnr)` → per cell, skip by TYPE (markdown) or
+empty range, else `MoltenEvaluateRange(cell.start_line, cell.end_line)` (the
+model's exact content range) → `wait_for_cell_completion` (line 232) polls
+every 150ms (line 25) up to 30s (line 26), detecting completion by
 **scraping Molten's virtual text for `Out[N]: ✓ Done`**
 (`extract_completed_output_num`, line 180) — the highest completed `Out[N]`
 must strictly increase (`get_highest_completed_output`, line 192).
-Markdown cells are skipped (line 542); cursor moves run under
-`with_suppressed_events` (line 320).
+Pre-F3 this navigated with cursor-relative searches (`"bnW"` without `c`):
+cursor on a marker found the PREVIOUS marker, double-executing adjacent
+cells — the model ranges made that class impossible (regression test:
+keymaps_spec "run-all via cell model"). Cursor moves run under
+`with_suppressed_events` (line 317).
 
 Namespace lookup (`get_molten_namespace`, line 105) must match
 **`"molten-extmarks"` exactly** — the block comment at lines 41-55 is law:
@@ -72,11 +83,13 @@ guard check).
 
 ## UI (ui.lua)
 
-`number_cells` (line 88): virt-text `[Cell N: code|markdown]` in
-`pyworks_cell_numbers` ns, red/green by `M.executed_cells[buf][N]`
-(mark_cell_executed line 50 / cleared line 61), debounced 150ms renumber on
-TextChanged (setup_buffer line 245). Folding (lines 126-155): `foldexpr`
-`>1` at each marker. Float windows: `create_floating_window` (line 371) —
+`number_cells` (line 79): virt-text `[Cell N: code|markdown]` in
+`pyworks_cell_numbers` ns from `cell_model.markers` (F3), red/green by
+`M.executed_cells[buf][N]` (mark_cell_executed line 50 / cleared line 61),
+debounced 150ms renumber on TextChanged (setup_buffer line 225). Folding:
+`cell_fold_expr` (line 128) starts a fold at each marker via
+`cell_model.is_marker_line`, `cell_fold_text` (:138) labels folds from the
+model. Float windows: `create_floating_window` (line 351) —
 `q`/`<Esc>`/WinLeave close it.
 
 ## Molten dependency surface
