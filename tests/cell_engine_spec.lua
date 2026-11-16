@@ -119,6 +119,100 @@ describe("cell_engine", function()
 		end)
 	end)
 
+	describe("get_markdown_regions", function()
+		it("should return content ranges excluding marker lines", function()
+			local bufnr = vim.api.nvim_create_buf(false, true)
+			vim.api.nvim_set_current_buf(bufnr)
+			vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {
+				"# %% [markdown]",
+				"Title text",
+				"more text",
+				"# %%",
+				"x = 1",
+			})
+
+			local regions = cell_engine.get_markdown_regions(bufnr)
+			assert.equals(1, #regions)
+			assert.equals(2, regions[1].start_line)
+			assert.equals(3, regions[1].end_line)
+
+			vim.api.nvim_buf_delete(bufnr, { force = true })
+		end)
+
+		it("should extend the final markdown cell to end of buffer", function()
+			local bufnr = vim.api.nvim_create_buf(false, true)
+			vim.api.nvim_set_current_buf(bufnr)
+			vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {
+				"# %%",
+				"x = 1",
+				"# %% [markdown]",
+				"tail text",
+				"more tail",
+			})
+
+			local regions = cell_engine.get_markdown_regions(bufnr)
+			assert.equals(1, #regions)
+			assert.equals(4, regions[1].start_line)
+			assert.equals(5, regions[1].end_line)
+
+			vim.api.nvim_buf_delete(bufnr, { force = true })
+		end)
+
+		it("should return multiple regions and skip empty cells", function()
+			local bufnr = vim.api.nvim_create_buf(false, true)
+			vim.api.nvim_set_current_buf(bufnr)
+			vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {
+				"# %% [markdown]",
+				"# %%",
+				"x = 1",
+				"# %% [markdown]",
+				"body",
+				"# %%",
+				"y = 2",
+			})
+
+			local regions = cell_engine.get_markdown_regions(bufnr)
+			assert.equals(1, #regions)
+			assert.equals(5, regions[1].start_line)
+			assert.equals(5, regions[1].end_line)
+
+			vim.api.nvim_buf_delete(bufnr, { force = true })
+		end)
+
+		it("should return empty list when no markdown cells exist", function()
+			local bufnr = vim.api.nvim_create_buf(false, true)
+			vim.api.nvim_set_current_buf(bufnr)
+			vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {
+				"# %%",
+				"x = 1",
+			})
+
+			assert.equals(0, #cell_engine.get_markdown_regions(bufnr))
+
+			vim.api.nvim_buf_delete(bufnr, { force = true })
+		end)
+
+		it("should honor a custom cell_marker", function()
+			cell_engine.configure({ cell_marker = "# COMMAND ----------" })
+			local bufnr = vim.api.nvim_create_buf(false, true)
+			vim.api.nvim_set_current_buf(bufnr)
+			vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {
+				"# COMMAND ---------- [markdown]",
+				"custom md",
+				"# COMMAND ----------",
+				"x = 1",
+			})
+
+			local regions = cell_engine.get_markdown_regions(bufnr)
+			assert.equals(1, #regions)
+			assert.equals(2, regions[1].start_line)
+			assert.equals(2, regions[1].end_line)
+
+			vim.api.nvim_buf_delete(bufnr, { force = true })
+			cell_engine.configure({ cell_marker = "# %%" })
+		end)
+	end)
+
 	describe("is_markdown_cell", function()
 		it("should detect markdown cells", function()
 			local bufnr = vim.api.nvim_create_buf(false, true)
