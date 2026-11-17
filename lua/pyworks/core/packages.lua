@@ -789,8 +789,9 @@ function M.scan_imports(filepath, language)
 	return imports
 end
 
--- Get installed packages for a language
-function M.get_installed_packages(language, filepath)
+-- Get installed packages for a language (async: the callback receives the
+-- installed list; cache hits resolve synchronously)
+function M.get_installed_packages(language, filepath, callback)
 	-- Key the cache per PROJECT (every file in one venv shares the same
 	-- installed list) instead of per file, so a whole project shares one
 	-- entry instead of duplicating one per file.
@@ -798,47 +799,48 @@ function M.get_installed_packages(language, filepath)
 	local cache_key = "installed_packages_" .. language .. "_" .. (project_root or "global")
 	local cached = cache.get(cache_key)
 	if cached then
-		return cached
+		callback(cached)
+		return
 	end
-
-	local installed = {}
 
 	if language == "python" then
 		local python = require("pyworks.languages.python")
-		installed = python.get_installed_packages(filepath)
+		python.get_installed_packages(filepath, function(installed)
+			cache.set(cache_key, installed)
+			callback(installed)
+		end)
+		return
 	end
 
-	cache.set(cache_key, installed)
-
-	return installed
+	callback({})
 end
 
--- Detect missing packages
-function M.detect_missing_packages(filepath, language)
+-- Detect missing packages (async; the callback receives the missing list)
+function M.detect_missing_packages(filepath, language, callback)
 	local imports = M.scan_imports(filepath, language)
-	local installed = M.get_installed_packages(language, filepath) -- Pass filepath!
+	M.get_installed_packages(language, filepath, function(installed)
+		-- Convert installed list to a set for faster lookup
+		local installed_set = {}
+		for _, pkg in ipairs(installed) do
+			installed_set[pkg:lower()] = true
+		end
 
-	-- Convert installed list to a set for faster lookup
-	local installed_set = {}
-	for _, pkg in ipairs(installed) do
-		installed_set[pkg:lower()] = true
-	end
+		local missing = {}
+		for _, import_name in ipairs(imports) do
+			-- Skip standard library modules and custom/local packages
+			if not M.is_stdlib(import_name, language) and not M.is_custom_package(import_name, language) then
+				-- Map import name to package name
+				local package_name = M.map_import_to_package(import_name, language)
 
-	local missing = {}
-	for _, import_name in ipairs(imports) do
-		-- Skip standard library modules and custom/local packages
-		if not M.is_stdlib(import_name, language) and not M.is_custom_package(import_name, language) then
-			-- Map import name to package name
-			local package_name = M.map_import_to_package(import_name, language)
-
-			-- Check if installed
-			if not installed_set[package_name:lower()] then
-				table.insert(missing, package_name)
+				-- Check if installed
+				if not installed_set[package_name:lower()] then
+					table.insert(missing, package_name)
+				end
 			end
 		end
-	end
 
-	return missing
+		callback(missing)
+	end)
 end
 
 -- Check if a module is likely a custom/local package
@@ -939,24 +941,26 @@ function M.validate_package_names(packages)
 	return valid, invalid
 end
 
--- Re-scan imports after file save
+-- Re-scan imports after file save (async internally; results notify)
 function M.rescan_for_language(filepath, language)
 	-- Invalidate cache
 	cache.invalidate("imports_" .. filepath .. "_" .. language)
 
 	-- Detect missing packages
-	local missing = M.detect_missing_packages(filepath, language)
-
-	if #missing > 0 then
-		notifications.notify_missing_packages(missing, language)
-	end
+	M.detect_missing_packages(filepath, language, function(missing)
+		if #missing > 0 then
+			notifications.notify_missing_packages(missing, language)
+		end
+	end)
 end
 
--- Analyze current buffer
-function M.analyze_buffer(language)
+-- Analyze current buffer (async; the callback receives
+-- { imports, installed, missing })
+function M.analyze_buffer(language, callback)
 	local filepath = vim.api.nvim_buf_get_name(0)
 	if filepath == "" then
-		return { imports = {}, missing = {}, installed = {} }
+		callback({ imports = {}, missing = {}, installed = {} })
+		return
 	end
 
 	-- Ensure absolute path
@@ -965,14 +969,15 @@ function M.analyze_buffer(language)
 	end
 
 	local imports = M.scan_imports(filepath, language)
-	local installed = M.get_installed_packages(language, filepath)
-	local missing = M.detect_missing_packages(filepath, language)
-
-	return {
-		imports = imports,
-		installed = installed,
-		missing = missing,
-	}
+	M.get_installed_packages(language, filepath, function(installed)
+		M.detect_missing_packages(filepath, language, function(missing)
+			callback({
+				imports = imports,
+				installed = installed,
+				missing = missing,
+			})
+		end)
+	end)
 end
 
 return M

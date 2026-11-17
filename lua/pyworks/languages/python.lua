@@ -268,7 +268,8 @@ function M.create_venv(filepath)
 	return success
 end
 
--- Install essential packages
+-- Install essential packages (async: probes and installation never block
+-- the UI thread)
 function M.install_essentials(filepath)
 	filepath = filepath or get_current_filepath()
 
@@ -285,92 +286,102 @@ function M.install_essentials(filepath)
 		end
 	end
 
-	-- Check if essentials are already installed
-	local missing_essentials = {}
-	for _, pkg in ipairs(config.essentials) do
-		if not M.is_package_installed(pkg, filepath) then
-			table.insert(missing_essentials, pkg)
-		end
-	end
-
-	if #missing_essentials == 0 then
-		return true
-	end
-
-	-- Mark as installing to prevent duplicate calls
+	-- Mark as in-flight for the whole probe+install window so concurrent
+	-- triggers don't duplicate work
 	state.set(install_key, true)
 
-	-- Get the correct package manager command
-	local package_manager = M.get_package_manager(filepath)
-
-	-- Check if we're using uv or pip
-	local is_uv = package_manager:match("^uv")
-
-	if is_uv then
-		-- For uv, check that uv is available
-		if vim.fn.executable("uv") == 0 then
-			notifications.notify_error("uv not found but venv was created with uv")
-			return false
+	-- Probe essentials sequentially (async import checks); then install
+	local function check_missing(i, missing, done)
+		local pkgs = config.essentials
+		if i > #pkgs then
+			done(missing)
+			return
 		end
-	else
-		-- For pip, check that pip exists in venv
-		local pip_path = M.get_pip_path(filepath)
-		if not pip_path or vim.fn.executable(pip_path) == 0 then
-			notifications.notify_error("pip not found in virtual environment")
-			return false
-		end
-	end
-
-	-- Upgrade pip if using pip (not needed for uv)
-	if not is_uv then
-		pcall(vim.system, { package_manager, "install", "--upgrade", "pip" }, { text = true })
-	end
-
-	local cmd = build_pip_command("install", missing_essentials, filepath)
-
-	if notifications.get_config().debug_mode then
-		notifications.notify("[Debug] Running: " .. table.concat(cmd, " "), vim.log.levels.DEBUG)
-	end
-
-	if not project_dir or vim.fn.isdirectory(project_dir) ~= 1 then
-		notifications.notify_error("Invalid project directory for essentials: " .. (project_dir or "nil"))
-		return false
-	end
-
-	local ok, sys_obj = pcall(vim.system, cmd, {
-		text = true,
-		cwd = project_dir,
-	}, function(obj)
-		vim.schedule(function()
-			-- Clear the installing flag
-			state.set(install_key, nil)
-
-			if obj.code == 0 then
-				for _, pkg in ipairs(missing_essentials) do
-					state.mark_package_installed("python", pkg)
-				end
-				cache.invalidate_pattern("^installed_packages_")
-			else
-				local error_msg = "Failed to install essential packages."
-				local filtered_errors = filter_pip_stderr(obj.stderr)
-				if #filtered_errors > 0 then
-					error_msg = error_msg .. "\nError: " .. table.concat(filtered_errors, "\n")
-				end
-				notifications.notify_error(error_msg)
+		M.is_package_installed_async(pkgs[i], filepath, function(installed)
+			if not installed then
+				table.insert(missing, pkgs[i])
 			end
+			check_missing(i + 1, missing, done)
 		end)
-	end)
-
-	if not ok then
-		state.set(install_key, nil) -- Clear the installing flag
-		notifications.notify_error("Failed to start essential packages installation: " .. tostring(sys_obj))
-		return false
 	end
+
+	check_missing(1, {}, function(missing_essentials)
+		if #missing_essentials == 0 then
+			state.set(install_key, nil)
+			return
+		end
+
+		-- Get the correct package manager command
+		local package_manager = M.get_package_manager(filepath)
+
+		-- Check if we're using uv or pip
+		local is_uv = package_manager:match("^uv")
+
+		if is_uv then
+			-- For uv, check that uv is available
+			if vim.fn.executable("uv") == 0 then
+				state.set(install_key, nil)
+				notifications.notify_error("uv not found but venv was created with uv")
+				return
+			end
+		else
+			-- For pip, check that pip exists in venv
+			local pip_path = M.get_pip_path(filepath)
+			if not pip_path or vim.fn.executable(pip_path) == 0 then
+				state.set(install_key, nil)
+				notifications.notify_error("pip not found in virtual environment")
+				return
+			end
+		end
+
+		local cmd = build_pip_command("install", missing_essentials, filepath)
+
+		if notifications.get_config().debug_mode then
+			notifications.notify("[Debug] Running: " .. table.concat(cmd, " "), vim.log.levels.DEBUG)
+		end
+
+		if not project_dir or vim.fn.isdirectory(project_dir) ~= 1 then
+			state.set(install_key, nil)
+			notifications.notify_error("Invalid project directory for essentials: " .. (project_dir or "nil"))
+			return
+		end
+
+		local ok, sys_obj = pcall(vim.system, cmd, {
+			text = true,
+			cwd = project_dir,
+		}, function(obj)
+			vim.schedule(function()
+				-- Clear the installing flag
+				state.set(install_key, nil)
+
+				if obj.code == 0 then
+					for _, pkg in ipairs(missing_essentials) do
+						state.mark_package_installed("python", pkg)
+					end
+					cache.invalidate_pattern("^installed_packages_")
+				else
+					local error_msg = "Failed to install essential packages."
+					local filtered_errors = filter_pip_stderr(obj.stderr)
+					if #filtered_errors > 0 then
+						error_msg = error_msg .. "\nError: " .. table.concat(filtered_errors, "\n")
+					end
+					notifications.notify_error(error_msg)
+				end
+			end)
+		end)
+
+		if not ok then
+			state.set(install_key, nil) -- Clear the installing flag
+			notifications.notify_error("Failed to start essential packages installation: " .. tostring(sys_obj))
+		end
+	end)
 
 	return true
 end
 
 -- Check if a package is installed (with timeout to prevent UI blocking)
+-- SYNC: intended for explicit user-invoked contexts (:checkhealth). Library
+-- code should use is_package_installed_async.
 function M.is_package_installed(package_name, filepath)
 	filepath = filepath or get_current_filepath()
 	local python_path = M.get_python_path(filepath)
@@ -390,39 +401,65 @@ function M.is_package_installed(package_name, filepath)
 	return success
 end
 
--- Get list of installed packages (with timeout to prevent UI blocking)
-function M.get_installed_packages(filepath)
+-- Async variant of is_package_installed; the callback receives true/false.
+function M.is_package_installed_async(package_name, filepath, callback)
+	filepath = filepath or get_current_filepath()
+
+	-- Use centralized reverse mapping to get import name from package name
+	local import_name = get_packages().map_package_to_import(package_name, "python")
+	if not import_name or not import_name:match("^[%w_%.]+$") then
+		callback(false)
+		return
+	end
+
+	local python_path = M.get_python_path(filepath)
+	if not python_path then
+		callback(false)
+		return
+	end
+
+	utils.async_system_call({ python_path, "-c", "import " .. import_name }, function(success)
+		callback(success)
+	end, { timeout = IMPORT_CHECK_TIMEOUT_MS })
+end
+
+-- Get list of installed packages (async; the callback receives a lowercase
+-- name array). The UI thread never waits on pip/uv.
+function M.get_installed_packages(filepath, callback)
 	filepath = filepath or get_current_filepath()
 	if not M.has_venv(filepath) then
-		return {}
+		callback({})
+		return
 	end
 
 	-- UV venv but no UV available - can't list packages
 	if M.venv_uses_uv(filepath) and vim.fn.executable("uv") == 0 then
-		return {}
+		callback({})
+		return
 	end
 
 	-- Regular pip venv without pip - can't list packages
 	if not M.venv_uses_uv(filepath) and not M.get_pip_path(filepath) then
-		return {}
+		callback({})
+		return
 	end
 
 	local cmd = build_pip_command("list", nil, filepath, { format = "freeze" })
-	local success, output, _ = utils.system_with_timeout(cmd, PIP_LIST_TIMEOUT_MS)
-
-	if not success then
-		return {}
-	end
-
-	local installed = {}
-	for line in output:gmatch("[^\r\n]+") do
-		local pkg = line:match("^([^=]+)")
-		if pkg then
-			table.insert(installed, pkg:lower())
+	utils.async_system_call(cmd, function(success, output)
+		if not success then
+			callback({})
+			return
 		end
-	end
 
-	return installed
+		local installed = {}
+		for line in output:gmatch("[^\r\n]+") do
+			local pkg = line:match("^([^=]+)")
+			if pkg then
+				table.insert(installed, pkg:lower())
+			end
+		end
+		callback(installed)
+	end, { timeout = PIP_LIST_TIMEOUT_MS })
 end
 
 -- Install packages
@@ -668,10 +705,8 @@ function M.handle_file(filepath, opts)
 	-- Ensure environment for this specific file's project
 	M.ensure_environment(filepath)
 
-	-- Detect missing packages (async to avoid blocking file open)
-	vim.defer_fn(function()
-		local missing = get_packages().detect_missing_packages(filepath, "python")
-
+	-- Detect missing packages (async: pip/uv never runs on the UI thread)
+	get_packages().detect_missing_packages(filepath, "python", function(missing)
 		if #missing > 0 then
 			notifications.notify_missing_packages(missing, "python")
 
@@ -681,7 +716,7 @@ function M.handle_file(filepath, opts)
 			-- Clear any previous missing packages
 			state.remove(state.KEYS.MISSING_PACKAGES .. "python")
 		end
-	end, 100) -- Small delay to avoid blocking file open
+	end)
 
 	-- If it's a notebook, ensure jupytext
 	if opts.is_notebook then

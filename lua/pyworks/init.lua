@@ -452,21 +452,21 @@ vim.api.nvim_create_user_command("PyworksStatus", function()
 	local ft = vim.bo.filetype
 
 	if ft == "python" then
-		local result = packages.analyze_buffer("python")
+		packages.analyze_buffer("python", function(result)
+			vim.notify(
+				string.format(
+					"[Python] Imports: %d | Installed: %d | Missing: %d",
+					#result.imports,
+					#result.installed,
+					#result.missing
+				),
+				vim.log.levels.INFO
+			)
 
-		vim.notify(
-			string.format(
-				"[Python] Imports: %d | Installed: %d | Missing: %d",
-				#result.imports,
-				#result.installed,
-				#result.missing
-			),
-			vim.log.levels.INFO
-		)
-
-		if #result.missing > 0 then
-			vim.notify("Missing packages: " .. table.concat(result.missing, ", "), vim.log.levels.WARN)
-		end
+			if #result.missing > 0 then
+				vim.notify("Missing packages: " .. table.concat(result.missing, ", "), vim.log.levels.WARN)
+			end
+		end)
 	else
 		vim.notify("Pyworks: Not a Python file", vim.log.levels.INFO)
 	end

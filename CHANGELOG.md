@@ -110,6 +110,22 @@ All notable changes to pyworks.nvim will be documented in this file.
 
 ### Fixed
 
+- **Environment probes no longer block the editor** (continued): the
+  installed-package detection chain (`pip list`/`uv pip list`, the
+  essentials import probes, and missing-package analysis) is now
+  callback-based and runs entirely off the UI thread — previously opening
+  a file could freeze it for 5-20s on fresh projects (4 × 5s import
+  probes + a 15s pip list). The unobserved fire-and-forget `pip install
+  --upgrade pip` that raced the essentials install on the same venv was
+  removed. `is_package_installed` stays synchronous for `:checkhealth`
+  only.
+- **Environment probes no longer block the editor** (kernels): the
+  kernelspec list/match and kernel-creation path is callback-based
+  (`get_kernel_for_language(language, filepath, callback)`); opening a
+  file in a fresh project no longer freezes the UI for up to ~2 minutes
+  (kernel list + ipykernel probe + creation), and `<leader>jl` resolves
+  the kernel asynchronously. A broken venv (directory without an
+  interpreter) now reports and stops instead of inventing a Python path.
 - **Notebook cell model is memoized per `(buffer, changedtick)`**: every
   `cell_at` call re-scanned the whole buffer, so a fold-expression pass on
   a large notebook with `notebooks.md_fold_default` cost O(markers ×

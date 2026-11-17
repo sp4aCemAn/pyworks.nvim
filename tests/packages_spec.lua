@@ -320,14 +320,19 @@ describe("packages", function()
 
 			local calls = 0
 			package.loaded["pyworks.languages.python"] = {
-				get_installed_packages = function()
+				get_installed_packages = function(_, cb)
 					calls = calls + 1
-					return { "requests" }
+					cb({ "requests" })
 				end,
 			}
 
-			local first = packages.get_installed_packages("python", f1)
-			local second = packages.get_installed_packages("python", f2)
+			local first, second
+			packages.get_installed_packages("python", f1, function(r)
+				first = r
+			end)
+			packages.get_installed_packages("python", f2, function(r)
+				second = r
+			end)
 
 			assert.same(first, second)
 			assert.equals(1, calls, "second file in the same project must be served from cache")
@@ -344,19 +349,25 @@ describe("packages", function()
 
 			local calls = 0
 			package.loaded["pyworks.languages.python"] = {
-				get_installed_packages = function()
+				get_installed_packages = function(_, cb)
 					calls = calls + 1
-					return { "requests" }
+					cb({ "requests" })
 				end,
 			}
 
-			packages.get_installed_packages("python", f)
+			local results = 0
+			packages.get_installed_packages("python", f, function()
+				results = results + 1
+			end)
 			assert.equals(1, calls)
 
 			cache.invalidate_pattern("^installed_packages_")
 
-			packages.get_installed_packages("python", f)
+			packages.get_installed_packages("python", f, function()
+				results = results + 1
+			end)
 			assert.equals(2, calls, "entry must be re-fetched after pattern invalidation")
+			assert.equals(2, results, "callback must fire on every call")
 
 			vim.fn.delete(root, "rf")
 		end)
