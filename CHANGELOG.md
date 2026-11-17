@@ -131,6 +131,17 @@ All notable changes to pyworks.nvim will be documented in this file.
 
 ### Fixed
 
+- **Cell operations no longer lose marker titles, misclassify titles
+  containing `[markdown]`, or error on nomodifiable buffers**:
+  `toggle_cell_type` preserves the text after the marker (`# %% my title`
+  → `# %% [markdown] my title` and back), the cell model anchors the type
+  tag to the marker itself (a code-cell title containing the literal
+  `[markdown]` no longer gets silently skipped by run-all), all mutating
+  cell ops warn instead of erroring on nomodifiable buffers, a blank-only
+  cell counts as empty (running it evaluated whitespace), unloaded
+  buffers no longer produce a phantom preamble cell, and custom markers
+  containing regex specials now search literally (`vim_search_pattern`
+  escapes vim's unescaped-special set).
 - **Failed command diagnostics now show stderr**: `system_with_timeout`
   discarded stderr, so failure messages (venv creation, kernel creation,
   jupytext conversion) showed an empty string while the actual diagnosis

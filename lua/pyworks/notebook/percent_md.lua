@@ -29,7 +29,11 @@ function M.comment(content_lines)
 end
 
 -- Canonical commented buffer lines -> real markdown content lines.
--- Raw (non-canonical) lines pass through unchanged, matching jupytext.
+-- Non-canonical lines (not starting with "#" / "# ") pass through
+-- unchanged, matching jupytext's reader. NOTE the documented edge (B19
+-- review): a raw UNcommented H1 typed mid-session ("# Title") IS
+-- "# "-prefixed, so uncomment strips its "#" and format_cell will
+-- re-comment it as paragraph text — jupytext-parity, level is lost.
 function M.uncomment(md_lines)
 	vim.validate({ md_lines = { md_lines, "table" } })
 	local out = {}

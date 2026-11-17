@@ -315,6 +315,41 @@ describe("cell_engine", function()
 			vim.api.nvim_buf_delete(bufnr, { force = true })
 		end)
 
+		it("toggle_cell_type preserves marker titles", function()
+			local bufnr = vim.api.nvim_create_buf(false, true)
+			vim.api.nvim_set_current_buf(bufnr)
+			vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {
+				"# %% my title",
+				"x = 1",
+			})
+			vim.api.nvim_win_set_cursor(0, { 2, 0 })
+
+			cell_engine.toggle_cell_type()
+			assert.equals("# %% [markdown] my title", vim.api.nvim_buf_get_lines(bufnr, 0, 1, false)[1])
+
+			cell_engine.toggle_cell_type()
+			assert.equals("# %% my title", vim.api.nvim_buf_get_lines(bufnr, 0, 1, false)[1])
+
+			vim.api.nvim_buf_delete(bufnr, { force = true })
+		end)
+
+		it("run_cell treats a blank-only cell as empty", function()
+			local bufnr = vim.api.nvim_create_buf(false, true)
+			vim.api.nvim_set_current_buf(bufnr)
+			vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {
+				"# %%",
+				"",
+				"# %%",
+				"x = 1",
+			})
+			vim.api.nvim_win_set_cursor(0, { 2, 0 })
+			vim.b[bufnr].molten_initialized = true
+
+			assert.is_false(cell_engine.run_cell(), "single-blank-line cell must count as empty")
+
+			vim.api.nvim_buf_delete(bufnr, { force = true })
+		end)
+
 		it("merge_cell_below should remove next marker", function()
 			local bufnr = vim.api.nvim_create_buf(false, true)
 			vim.api.nvim_set_current_buf(bufnr)
@@ -699,6 +734,18 @@ describe("cell_engine", function()
 		it("vim_search_pattern returns raw marker for vim.fn.search", function()
 			cell_engine.configure({ cell_marker = "# COMMAND ----------" })
 			assert.equals("^# COMMAND ----------", cell_engine.vim_search_pattern())
+		end)
+
+		it("vim_search_pattern escapes vim-regex specials in custom markers", function()
+			-- A marker containing regex specials must still be a LITERAL
+			-- search: `. * [ ^ $ ~` are escaped; `%`, `-`, `|`, `(`, `)`,
+			-- `#` are literal in magic mode and stay untouched
+			local bs = string.char(92) -- backslash, kept explicit to avoid escape soup
+			cell_engine.configure({ cell_marker = "# CELL(.)*[" })
+			assert.equals("^# CELL(" .. bs .. "." .. ")" .. bs .. "*" .. bs .. "[", cell_engine.vim_search_pattern())
+
+			cell_engine.configure({ cell_marker = "# CMD-%%.|^~" })
+			assert.equals("^# CMD-%%" .. bs .. ".|" .. bs .. "^" .. bs .. "~", cell_engine.vim_search_pattern())
 		end)
 
 		it("get_cell_pattern escapes Lua pattern special chars", function()

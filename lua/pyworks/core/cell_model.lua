@@ -32,11 +32,20 @@ local function get_cell_engine()
 	return require("pyworks.core.cell_engine")
 end
 
+-- The configured marker, via cell_engine (same lazy pattern as below)
+local function config_cell_marker()
+	return get_cell_engine().get_marker()
+end
+
 local function classify_marker(marker_text)
-	if marker_text:match("%[markdown%]") then
+	-- The type tag must directly follow the marker: "# %% [markdown] title".
+	-- A bare substring match would misclassify code cells whose TITLE
+	-- contains the literal "[markdown]".
+	local body = marker_text:sub(#config_cell_marker() + 1)
+	if body:match("^%s*%[markdown%]") then
 		return "markdown"
 	end
-	if marker_text:match("%[raw%]") then
+	if body:match("^%s*%[raw%]") then
 		return "raw"
 	end
 	return "code"
@@ -71,7 +80,16 @@ function M.for_buffer(bufnr)
 		return memo.cells
 	end
 
+	-- A valid-but-unloaded buffer returns {} from nvim_buf_get_lines; a
+	-- scan would fabricate a phantom preamble cell over a nonexistent line
+	if not vim.api.nvim_buf_is_loaded(bufnr) then
+		return {}
+	end
+
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+	if #lines == 0 then
+		return {}
+	end
 	local line_count = math.max(#lines, 1)
 	local pattern = get_cell_engine().get_cell_pattern()
 

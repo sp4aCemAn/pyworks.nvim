@@ -137,6 +137,19 @@ describe("core cell_model", function()
 			vim.api.nvim_buf_delete(bufnr, { force = true })
 		end)
 
+		it("a code-cell TITLE containing '[markdown]' stays a code cell", function()
+			-- Regression: classify_marker used a bare substring match, so
+			-- "# %% load [markdown] data" misclassified as markdown — and
+			-- run-all (skip-by-TYPE) silently skipped executing it.
+			local bufnr = make_buf({
+				"# %% load [markdown] data",
+				"x = 1",
+			})
+			local cells = cell_model.for_buffer(bufnr)
+			assert.equals("code", cells[1].type)
+			vim.api.nvim_buf_delete(bufnr, { force = true })
+		end)
+
 		it("honors a custom cell_marker", function()
 			cell_engine.configure({ cell_marker = "# COMMAND ----------" })
 			local bufnr = make_buf({
