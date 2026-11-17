@@ -110,6 +110,17 @@ All notable changes to pyworks.nvim will be documented in this file.
 
 ### Fixed
 
+- **Failed command diagnostics now show stderr**: `system_with_timeout`
+  discarded stderr, so failure messages (venv creation, kernel creation,
+  jupytext conversion) showed an empty string while the actual diagnosis
+  was on stderr. On failure the stderr is now surfaced when stdout is
+  empty.
+- **Every subprocess has a time bound**: the last unbounded
+  `:wait()` calls — the pynvim registration probe, `:checkhealth`'s Python
+  host check, `:PyworksDiagnostics`' python/uv probes, the jupytext
+  import check, and both jupytext conversions (notebook open AND save) —
+  now run with explicit timeouts (10-30s), so a hung interpreter or
+  jupytext process can no longer freeze the editor indefinitely.
 - **Environment probes no longer block the editor** (continued): the
   installed-package detection chain (`pip list`/`uv pip list`, the
   essentials import probes, and missing-package analysis) is now

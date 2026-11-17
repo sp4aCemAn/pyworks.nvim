@@ -296,17 +296,23 @@ function M.async_system_call(cmd, callback, options)
 end
 
 -- Synchronous system call with timeout using vim.system() (Neovim 0.10+)
+-- options: optional { stdin = string, cwd = string, env = table }
 -- Returns: success (boolean), output (string), exit_code (number)
-function M.system_with_timeout(cmd, timeout_ms)
+function M.system_with_timeout(cmd, timeout_ms, options)
 	vim.validate({
 		cmd = { cmd, "table" },
 		timeout_ms = { timeout_ms, "number", true },
+		options = { options, "table", true },
 	})
 	timeout_ms = timeout_ms or DEFAULT_TIMEOUT_MS
+	options = options or {}
 
 	local ok, sys_obj = pcall(vim.system, cmd, {
 		text = true,
 		timeout = timeout_ms > 0 and timeout_ms or nil,
+		stdin = options.stdin,
+		cwd = options.cwd,
+		env = options.env,
 	})
 
 	if not ok then
@@ -321,8 +327,13 @@ function M.system_with_timeout(cmd, timeout_ms)
 
 	local success = result.code == 0
 	local stdout = result.stdout or ""
+	local stderr = result.stderr or ""
 
-	return success, stdout, result.code
+	-- Callers display `output`; on failure stdout is often empty while the
+	-- actual diagnosis is on stderr — surface stderr instead of blank.
+	local output = stdout ~= "" and stdout or stderr
+
+	return success, output, result.code
 end
 
 -- Safe file write with proper error handling
@@ -431,16 +442,14 @@ function M.is_plugin_installed(plugin_name)
 	return false
 end
 
--- Check if a Python module can be imported
+-- Check if a Python module can be imported (30s timeout)
 function M.check_python_import(module_name)
 	if not module_name or not module_name:match("^[%w_%.]+$") then
 		return false
 	end
 	local python_cmd = vim.g.python3_host_prog or "python3"
-	local ok, result = pcall(function()
-		return vim.system({ python_cmd, "-c", "import " .. module_name }, { text = true }):wait()
-	end)
-	return ok and result and result.code == 0
+	local ok, _, _ = M.system_with_timeout({ python_cmd, "-c", "import " .. module_name }, 30000)
+	return ok
 end
 
 return M

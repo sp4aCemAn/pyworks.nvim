@@ -7,6 +7,10 @@ local cache = require("pyworks.core.cache")
 local notifications = require("pyworks.core.notifications")
 local utils = require("pyworks.utils")
 
+-- Bound on jupytext conversions (read/write). A wedged jupytext must not
+-- hang the editor forever.
+local JUPYTEXT_CONVERSION_TIMEOUT_MS = 30000
+
 -- Augroup for notebook handling
 local augroup = vim.api.nvim_create_augroup("PyworksNotebook", { clear = true })
 
@@ -39,13 +43,11 @@ function M.is_jupytext_installed(filepath)
 		end
 	end
 
-	-- Fallback: check if Python can import jupytext
+	-- Fallback: check if Python can import jupytext (30s timeout)
 	local python_path = M.get_python_for_jupytext(filepath)
 	if python_path then
-		local ok, result = pcall(function()
-			return vim.system({ python_path, "-c", "import jupytext" }, { text = true }):wait()
-		end)
-		if ok and result and result.code == 0 then
+		local ok = utils.system_with_timeout({ python_path, "-c", "import jupytext" }, 30000)
+		if ok then
 			cache.set(cache_key, true)
 			return true
 		end
@@ -184,20 +186,21 @@ local function convert_ipynb_to_percent(filepath)
 		return nil, "jupytext CLI not found"
 	end
 
-	local result = vim.system({
+	-- Bounded: a wedged jupytext must not hang the editor forever
+	local success, output = utils.system_with_timeout({
 		jupytext_cmd,
 		"--to",
 		"py:percent",
 		"--output",
 		"-",
 		filepath,
-	}, { text = true }):wait()
+	}, JUPYTEXT_CONVERSION_TIMEOUT_MS)
 
-	if result.code ~= 0 then
-		return nil, result.stderr or "jupytext conversion failed"
+	if not success then
+		return nil, output ~= "" and output or "jupytext conversion failed"
 	end
 
-	return result.stdout, nil
+	return output, nil
 end
 
 -- Convert percent-format Python script back to .ipynb using jupytext CLI
@@ -207,20 +210,21 @@ local function convert_percent_to_ipynb(content, filepath)
 		return nil, "jupytext CLI not found"
 	end
 
-	local result = vim.system({
+	-- Bounded: a wedged jupytext must not hang the editor forever
+	local success, output = utils.system_with_timeout({
 		jupytext_cmd,
 		"--to",
 		"ipynb",
 		"--output",
 		"-",
 		"-",
-	}, { text = true, stdin = content }):wait()
+	}, JUPYTEXT_CONVERSION_TIMEOUT_MS, { stdin = content })
 
-	if result.code ~= 0 then
-		return nil, result.stderr or "jupytext conversion failed"
+	if not success then
+		return nil, output ~= "" and output or "jupytext conversion failed"
 	end
 
-	return result.stdout, nil
+	return output, nil
 end
 
 -- Read notebook and convert to percent format

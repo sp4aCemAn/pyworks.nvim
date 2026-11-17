@@ -215,12 +215,11 @@ function M.register_molten()
 	-- Use the Python host that pyworks has configured
 	local python_cmd = vim.g.python3_host_prog or "python3"
 
-	-- Check if pynvim is available using vim.system (Neovim 0.10+)
-	local ok, result = pcall(function()
-		return vim.system({ python_cmd, "-c", "import pynvim" }, { text = true }):wait()
-	end)
+	-- Check if pynvim is available (30s timeout: a hung python host must
+	-- not freeze the editor indefinitely)
+	local success, _, _ = require("pyworks.utils").system_with_timeout({ python_cmd, "-c", "import pynvim" }, 30000)
 
-	if not ok or not result or result.code ~= 0 then
+	if not success then
 		-- pynvim not installed - will be handled by pyworks essentials
 		return false
 	end
