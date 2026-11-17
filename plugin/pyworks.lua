@@ -35,19 +35,6 @@ vim.api.nvim_create_autocmd({ "BufReadPost", "BufNewFile" }, {
 		-- Use the full path for project detection
 		local check_path = full_path ~= "" and full_path or ev.file
 
-		-- For Python files, ALWAYS run pyworks (it will create venv if needed)
-		-- For other languages, check for project markers
-		local ext = vim.fn.fnamemodify(check_path, ":e")
-		local ft = vim.bo[bufnr].filetype
-
-		-- Always process Python files and notebooks
-		if ext ~= "py" and ext ~= "ipynb" and ft ~= "python" then
-			-- For non-Python files, check for project markers
-			if not is_pyworks_project(check_path) then
-				return
-			end
-		end
-
 		-- Debug: Show that autocmd fired
 		if vim.g.pyworks_debug then
 			vim.notify("[Pyworks] File opened: " .. check_path, vim.log.levels.DEBUG)

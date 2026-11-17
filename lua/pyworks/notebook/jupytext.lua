@@ -5,7 +5,6 @@ local M = {}
 
 local cache = require("pyworks.core.cache")
 local notifications = require("pyworks.core.notifications")
-local state = require("pyworks.core.state")
 local utils = require("pyworks.utils")
 
 -- Augroup for notebook handling
@@ -106,7 +105,6 @@ function M.install_jupytext(filepath)
 			if obj.code == 0 then
 				cache.invalidate("jupytext_installed")
 				notifications.progress_finish("jupytext_install", "Jupytext installed successfully")
-				state.set(state.KEYS.PERSISTENT_JUPYTEXT, true)
 			else
 				notifications.progress_finish("jupytext_install")
 				notifications.notify_error("Failed to install jupytext")

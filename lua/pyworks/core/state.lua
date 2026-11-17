@@ -9,7 +9,6 @@ M.KEYS = {
 	INITIALIZED = "initialized_",
 	INSTALLING_ESSENTIALS = "installing_essentials_",
 	MISSING_PACKAGES = "missing_packages_",
-	PERSISTENT_JUPYTEXT = "persistent_jupytext_installed",
 	ENV = "env_",
 	INSTALLED = "installed_",
 	LAST_CHECK = "last_check_",
