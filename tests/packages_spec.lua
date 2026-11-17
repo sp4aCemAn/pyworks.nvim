@@ -206,11 +206,9 @@ describe("packages", function()
 		end)
 
 		it("flags prefix-squats of known packages regardless of edit distance", function()
-			-- "scikit" ties between scikit-learn/scikit-image (same length),
-			-- so accept either canonical match
-			assert.is_true(
-				packages.is_typosquat("scikit") == "scikit-learn" or packages.is_typosquat("scikit") == "scikit-image"
-			)
+			-- "scikit" ties between scikit-image/scikit-learn (same length);
+			-- the lexicographic tie-break makes the winner deterministic
+			assert.are.equal("scikit-image", packages.is_typosquat("scikit"))
 			assert.are.equal("pandas", packages.is_typosquat("panda"))
 			assert.are.equal("matplotlib", packages.is_typosquat("matplot"))
 			assert.are.equal("torchvision", packages.is_typosquat("torchvisio"))
@@ -219,15 +217,19 @@ describe("packages", function()
 		it("does not prefix-flag known packages or short candidates", function()
 			assert.is_nil(packages.is_typosquat("jupyter")) -- known, though prefix of jupyterlab
 			assert.is_nil(packages.is_typosquat("vex")) -- ≥2 edits from any short known name (tox/jax/ray)
-			-- "fast" ties at 2 edits between flask, dash, AND dask; hash
-			-- iteration order picks the winner, so accept any of them
-			-- (precedent: "scikit"). Blocking is correct in all cases.
-			local closest = packages.is_typosquat("fast")
-			assert.is_true(
-				closest == "flask" or closest == "dash" or closest == "dask",
-				"expected flask/dash/dask, got " .. tostring(closest)
-			)
+			-- "fast" ties at 2 edits between dash and dask; the lexicographic
+			-- tie-break picks "dash" deterministically (precedent: "scikit").
+			assert.are.equal("dash", packages.is_typosquat("fast"))
 			assert.is_nil(packages.is_typosquat("dask")) -- known
+		end)
+
+		it("is deterministic across repeated calls (no pairs-order tie flakiness)", function()
+			local scikit_answer = packages.is_typosquat("scikit")
+			local fast_answer = packages.is_typosquat("fast")
+			for _ = 1, 20 do
+				assert.are.equal(scikit_answer, packages.is_typosquat("scikit"))
+				assert.are.equal(fast_answer, packages.is_typosquat("fast"))
+			end
 		end)
 
 		it("strips version specifiers and extras before matching", function()

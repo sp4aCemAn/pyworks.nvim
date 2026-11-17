@@ -110,6 +110,12 @@ All notable changes to pyworks.nvim will be documented in this file.
 
 ### Fixed
 
+- **Typosquat reporting is now deterministic**: when a suspicious name is
+  equidistant from two known packages (`scikit` → `scikit-image`/`scikit-learn`,
+  `fast` → `dash`/`dask`), the reported "closest" package was chosen by
+  Lua hash-iteration order, so the same input could report a different
+  neighbor across runs. Equal-distance ties now resolve lexicographically
+  in both the prefix-squat and edit-distance rules.
 - **Package-name validation is now on every exec path** (security):
   `validate_package_names` existed but was only reachable through a
   `packages.install_packages` wrapper that had zero callers, so live paths

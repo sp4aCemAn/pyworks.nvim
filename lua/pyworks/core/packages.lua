@@ -394,12 +394,14 @@ function M.is_typosquat(package_name)
 	-- "matplot" (of matplotlib) are classic squat registrations and are too
 	-- far in edit distance for the threshold below. Candidates that are a
 	-- proper prefix of a known package (>=5 chars) are flagged; closest =
-	-- shortest such known name.
+	-- shortest such known name, ties broken lexicographically so the
+	-- reported canonical name is stable across processes (pairs() hash
+	-- order is not).
 	if #norm >= 5 then
 		local best_name, best_len = nil, nil
 		for known_norm, canonical in pairs(known_packages) do
 			if #known_norm > #norm and known_norm:sub(1, #norm) == norm then
-				if not best_len or #known_norm < best_len then
+				if not best_len or #known_norm < best_len or (#known_norm == best_len and canonical < best_name) then
 					best_len, best_name = #known_norm, canonical
 				end
 			end
@@ -409,13 +411,14 @@ function M.is_typosquat(package_name)
 		end
 	end
 
-	-- Threshold: 1 edit for tiny names, 2 otherwise
+	-- Threshold: 1 edit for tiny names, 2 otherwise. The distance bound
+	-- stays at min(max_dist, best_dist) so equal-distance candidates are
+	-- still measured — ties are broken lexicographically for determinism.
 	local max_dist = #norm <= 3 and 1 or 2
 	local best_name, best_dist = nil, max_dist + 1
 	for known_norm, canonical in pairs(known_packages) do
-		local d =
-			edit_distance_at_most(norm, known_norm, best_dist - 1 < 1 and max_dist or math.min(max_dist, best_dist - 1))
-		if d <= max_dist and d < best_dist then
+		local d = edit_distance_at_most(norm, known_norm, math.min(max_dist, best_dist))
+		if d < best_dist or (d == best_dist and d <= max_dist and canonical < best_name) then
 			best_dist, best_name = d, canonical
 		end
 	end
