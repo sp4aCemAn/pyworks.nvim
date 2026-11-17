@@ -23,7 +23,7 @@ function M.setup_cell_highlights()
 	else
 		-- Kanagawa dark mode colors: lighter colors for visibility on dark background
 		vim.api.nvim_set_hl(0, "PyworksCellNumberUnrun", { fg = "#2222DD", bold = true }) -- Bright red (samuraiRed)
-		vim.api.nvim_set_hl(0, "PyworksCellNumberExecuted", { fg = "#98BB6C", bold = true }) -- Bright green (springGreen)
+		vim.api.nvim_set_hl(0, "PyworksCellNumberExecuted", { fg = "#ee4444", bold = true }) -- Bright green (springGreen)
 	end
 end
 
