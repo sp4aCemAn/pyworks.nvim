@@ -207,6 +207,14 @@ local function reload_notebook_buffer(filepath, opts)
 		return false
 	end
 
+	-- Refuse to silently discard unsaved edits; :edit would fail with E37
+	-- anyway — surface the actionable escape instead. force (command bang)
+	-- opts in to discarding.
+	if vim.bo[bufnr].modified and not opts.force then
+		vim.notify("Notebook buffer has unsaved edits; save or use :PyworksReloadNotebook!", vim.log.levels.WARN)
+		return false
+	end
+
 	-- Begin protected reload operation
 	local release = guard.begin_reload(bufnr)
 
@@ -223,7 +231,7 @@ local function reload_notebook_buffer(filepath, opts)
 		jupytext.configure_notebook_handler()
 
 		-- Use :edit to open fresh from disk - this triggers BufReadCmd
-		local ok = pcall(vim.cmd, "edit " .. vim.fn.fnameescape(filepath))
+		local ok = pcall(vim.cmd, (opts.force and "edit! " or "edit ") .. vim.fn.fnameescape(filepath))
 
 		if ok then
 			-- Verify conversion worked (buffer should NOT start with '{')
@@ -250,7 +258,8 @@ local function reload_notebook_buffer(filepath, opts)
 end
 
 -- Manual command to reload current notebook (useful after session restore)
-vim.api.nvim_create_user_command("PyworksReloadNotebook", function()
+-- Bang (!) discards unsaved buffer edits; without it a modified buffer is refused.
+vim.api.nvim_create_user_command("PyworksReloadNotebook", function(ev)
 	local filepath = vim.api.nvim_buf_get_name(0)
 	if not filepath:match("%.ipynb$") then
 		vim.notify("Not a notebook file", vim.log.levels.WARN)
@@ -265,8 +274,8 @@ vim.api.nvim_create_user_command("PyworksReloadNotebook", function()
 		vim.notify("Buffer name: " .. vim.api.nvim_buf_get_name(0), vim.log.levels.INFO)
 		return
 	end
-	reload_notebook_buffer(filepath)
-end, { desc = "Reload current notebook with jupytext conversion" })
+	reload_notebook_buffer(filepath, { force = ev.bang == "!" })
+end, { desc = "Reload current notebook with jupytext conversion", bang = true })
 
 -- Handle session restore: re-trigger notebook conversion for .ipynb files
 -- Session restore bypasses BufReadCmd, leaving notebooks blank or as raw JSON

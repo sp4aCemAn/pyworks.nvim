@@ -117,6 +117,13 @@ All notable changes to pyworks.nvim will be documented in this file.
   atomic: the conversion output is validated as real nbformat JSON *before*
   the target is touched, written to a temp file in the same directory, and
   renamed over the target; any failure leaves the original file untouched.
+- **`reload_notebook` / `:PyworksReloadNotebook` no longer silently discard
+  unsaved edits**: a modified notebook buffer is refused with an actionable
+  warning (save, or `:PyworksReloadNotebook!` to discard deliberately —
+  the command now supports `!`). The JSON-fallback view (jupytext missing)
+  and error view now tell the user how to retry conversion
+  (`:PyworksReloadNotebook`) instead of leaving them in a locked buffer
+  with an install-only hint.
 - **Markdown cell formatter mangled canonical notebooks (`:PyworksFormatMarkdownCell` /
   `<leader>jfm`)**: jupytext percent stores markdown cell content commented
   (`# text`), but the formatter previously received the buffer lines verbatim

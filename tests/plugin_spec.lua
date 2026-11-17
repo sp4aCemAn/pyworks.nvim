@@ -86,4 +86,39 @@ describe("plugin/pyworks", function()
 			vim.api.nvim_buf_delete(bufnr, { force = true })
 		end)
 	end)
+
+	describe("PyworksReloadNotebook unsaved-edit guard", function()
+		local guard
+
+		before_each(function()
+			guard = require("pyworks.core.recursion_guard")
+			guard.force_reset()
+			vim.g.loaded_pyworks = nil
+			vim.cmd("source " .. vim.fn.fnameescape(plugin_path .. "plugin/pyworks.lua"))
+		end)
+
+		it("refuses without bang and leaves the modified buffer untouched", function()
+			local dir = vim.fn.tempname()
+			vim.fn.mkdir(dir, "p")
+			local nb_path = dir .. "/nb.ipynb"
+			vim.fn.writefile({ '{"nbformat": 4, "cells": []}' }, nb_path)
+
+			local bufnr = vim.api.nvim_create_buf(false, true)
+			vim.api.nvim_buf_set_name(bufnr, nb_path)
+			vim.bo[bufnr].buftype = ""
+			vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "unsaved edit sentinel" })
+			vim.bo[bufnr].modified = true
+			vim.api.nvim_set_current_buf(bufnr)
+
+			local ok = pcall(vim.cmd, "PyworksReloadNotebook")
+			assert.is_true(ok)
+
+			assert.equals("unsaved edit sentinel", vim.api.nvim_buf_get_lines(bufnr, 0, 1, false)[1])
+			assert.is_true(vim.bo[bufnr].modified)
+
+			guard.force_reset()
+			vim.api.nvim_buf_delete(bufnr, { force = true })
+			vim.fn.delete(dir, "rf")
+		end)
+	end)
 end)

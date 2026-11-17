@@ -259,7 +259,10 @@ local function read_notebook(bufnr, filepath)
 					if convert_err then
 						notifications.notify("Error: " .. convert_err, vim.log.levels.DEBUG)
 					end
-					notifications.notify("Run :PyworksSetup to install jupytext", vim.log.levels.INFO)
+					notifications.notify(
+						"Run :PyworksSetup to install jupytext, then :PyworksReloadNotebook to retry",
+						vim.log.levels.INFO
+					)
 				end)
 			else
 				vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {
@@ -268,6 +271,7 @@ local function read_notebook(bufnr, filepath)
 					"File: " .. filepath,
 					"",
 					"Run :PyworksSetup to configure Python environment",
+					"then :PyworksReloadNotebook to retry conversion",
 				})
 				vim.bo[bufnr].filetype = "text"
 				vim.bo[bufnr].modifiable = false
@@ -451,12 +455,22 @@ function M.configure_notebook_handler()
 end
 
 -- Reload a notebook buffer (useful after installing jupytext)
-function M.reload_notebook(bufnr)
+-- force: when true, unsaved buffer edits are discarded; otherwise a
+-- modified buffer is refused so user edits are never silently destroyed.
+function M.reload_notebook(bufnr, force)
 	bufnr = bufnr or vim.api.nvim_get_current_buf()
 	local filepath = vim.b[bufnr].pyworks_notebook_path or vim.api.nvim_buf_get_name(bufnr)
 
 	if not filepath:match("%.ipynb$") then
 		notifications.notify("Not a notebook file", vim.log.levels.WARN)
+		return false
+	end
+
+	if vim.bo[bufnr].modified and not force then
+		notifications.notify(
+			"Notebook buffer has unsaved edits; :w to keep them or :PyworksReloadNotebook! to discard",
+			vim.log.levels.WARN
+		)
 		return false
 	end
 

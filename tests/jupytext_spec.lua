@@ -111,6 +111,49 @@ describe("jupytext", function()
 
 			vim.api.nvim_buf_delete(bufnr, { force = true })
 		end)
+
+		it("refuses a modified buffer without force and leaves its content untouched", function()
+			local bufnr = vim.api.nvim_create_buf(false, true)
+			vim.api.nvim_buf_set_name(bufnr, "/tmp/some_notebook.ipynb")
+			vim.bo[bufnr].buftype = "" -- nofile buffers don't track 'modified'
+			vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "unsaved edit sentinel" })
+			vim.bo[bufnr].modified = true
+
+			local result = jupytext.reload_notebook(bufnr)
+			assert.is_false(result)
+			assert.equals("unsaved edit sentinel", vim.api.nvim_buf_get_lines(bufnr, 0, 1, false)[1])
+			assert.is_true(vim.bo[bufnr].modified)
+
+			vim.api.nvim_buf_delete(bufnr, { force = true })
+		end)
+
+		it("force=true discards unsaved edits and converts a real .ipynb", function()
+			if jupytext.find_jupytext_cli() == nil then
+				return
+			end
+
+			local dir = vim.fn.tempname()
+			vim.fn.mkdir(dir, "p")
+			local nb_path = dir .. "/nb.ipynb"
+			vim.fn.writefile({
+				'{"cells": [{"cell_type": "code", "source": ["print(1)"], "metadata": {}, "outputs": [], "execution_count": null}], "metadata": {}, "nbformat": 4, "nbformat_minor": 5}',
+			}, nb_path)
+
+			local bufnr = vim.api.nvim_create_buf(false, true)
+			vim.api.nvim_buf_set_name(bufnr, nb_path)
+			vim.bo[bufnr].buftype = "" -- nofile buffers don't track 'modified'
+			vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "unsaved edit sentinel" })
+			vim.bo[bufnr].modified = true
+
+			local result = jupytext.reload_notebook(bufnr, true)
+			assert.is_true(result)
+			local first = vim.api.nvim_buf_get_lines(bufnr, 0, 1, false)[1]
+			assert.is_false(first:match("^%s*{") ~= nil, "buffer should be percent-format, not JSON")
+			assert.is_false(vim.bo[bufnr].modified)
+
+			vim.api.nvim_buf_delete(bufnr, { force = true })
+			vim.fn.delete(dir, "rf")
+		end)
 	end)
 end)
 
