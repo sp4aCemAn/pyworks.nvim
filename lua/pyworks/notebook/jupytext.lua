@@ -165,12 +165,20 @@ function M.find_jupytext_cli(filepath)
 
 	for _, path in ipairs(venv_paths) do
 		if vim.fn.executable(path) == 1 then
-			-- Add directory to PATH if not already present (prevents accumulation)
+			-- Add directory to PATH if not already present (prevents
+			-- accumulation). Exact-entry match: a substring/prefix match
+			-- would skip prepending when a DIFFERENT directory sharing the
+			-- prefix (/a/b vs /a/b2) is already on PATH.
 			local dir = vim.fn.fnamemodify(path, ":h")
-			local current_path = vim.env.PATH or ""
-			local path_pattern = vim.pesc(dir) .. "[:\n]?"
-			if not current_path:match("^" .. path_pattern) and not current_path:match(":" .. path_pattern) then
-				vim.env.PATH = dir .. ":" .. current_path
+			local already = false
+			for entry in (vim.env.PATH or ""):gmatch("[^:\n]+") do
+				if entry == dir then
+					already = true
+					break
+				end
+			end
+			if not already then
+				vim.env.PATH = dir .. ":" .. (vim.env.PATH or "")
 			end
 			return path
 		end

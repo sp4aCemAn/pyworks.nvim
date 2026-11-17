@@ -97,42 +97,29 @@ local function concat_virt_text(virt_text)
 	return table.concat(parts)
 end
 
--- Get Molten extmarks namespace ID (cached for performance in hot path)
+-- Get Molten extmarks namespace ID (cached scalar)
 --
 -- CRITICAL: Must match "molten-extmarks" EXACTLY - this is where Out[N] markers appear.
 -- DO NOT use pattern matching like name:match("^molten") - see comment above molten_ns_cache.
 --
--- This function is called every 150ms during cell execution polling, so we cache the
--- namespace ID for performance. The cache is validated on each call to handle Molten
--- restarts that might recreate namespaces with different IDs.
+-- The "cache" is honest now: nvim_get_namespaces() is one API call either
+-- way, so the cached path just avoids re-assigning; staleness is detected
+-- by verifying the cached ID maps back to "molten-extmarks" in the SAME
+-- table (Molten restarts can recreate namespaces with new IDs).
 --
 -- @return number|nil The namespace ID, or nil if molten-extmarks not found
 local function get_molten_namespace()
 	local namespaces = vim.api.nvim_get_namespaces()
 
-	-- Validate cache: ensure cached ID still exists and matches molten-extmarks
-	if molten_ns_cache then
-		for name, id in pairs(namespaces) do
-			if id == molten_ns_cache and name == "molten-extmarks" then
-				debug_log(string.format("get_molten_namespace: cache HIT id=%d", molten_ns_cache))
-				return molten_ns_cache
-			end
-		end
-		-- Cache is stale, clear it
-		debug_log(string.format("get_molten_namespace: cache STALE (was %d)", molten_ns_cache))
+	local id = namespaces["molten-extmarks"]
+	if id == nil then
+		debug_log("get_molten_namespace: NOT FOUND (molten-extmarks)")
 		molten_ns_cache = nil
+		return nil
 	end
-
-	-- Look up molten-extmarks namespace specifically
-	for name, id in pairs(namespaces) do
-		if name == "molten-extmarks" then
-			molten_ns_cache = id
-			debug_log(string.format("get_molten_namespace: found FRESH id=%d name=%s", id, name))
-			return id
-		end
-	end
-	debug_log("get_molten_namespace: NOT FOUND (molten-extmarks)")
-	return nil
+	molten_ns_cache = id
+	debug_log(string.format("get_molten_namespace: id=%d", id))
+	return id
 end
 
 -- Debug: dump all extmarks with virtual text/lines to see actual Molten output format

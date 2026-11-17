@@ -94,12 +94,25 @@ local function resolve_bufnr(ctx, result)
 end
 
 -- functions cannot be indexed in Lua 5.1 without a metatable, so track
--- wrapped handlers in a weak-keyed set instead of a flag field
-local wrapped_handlers = setmetatable({}, { __mode = "k" })
+-- original->wrapper pairs in a weak-keyed map plus a weak set of wrappers:
+--  - a client whose handler is ALREADY our wrapper: no-op (no double-wrap)
+--  - two clients sharing one original handler function: BOTH get the same
+--    wrapper (re-wrapping must yield the existing wrapper, not nil — the
+--    second client would otherwise go unfiltered)
+local original_to_wrapper = setmetatable({}, { __mode = "k" })
+local wrappers = setmetatable({}, { __mode = "k" })
 
 local function make_wrapper(original)
-	if type(original) ~= "function" or wrapped_handlers[original] then
+	if type(original) ~= "function" then
 		return nil
+	end
+	if wrappers[original] then
+		-- Already one of our wrappers: the caller's table is wrapped
+		return nil
+	end
+	local existing = original_to_wrapper[original]
+	if existing then
+		return existing
 	end
 	local wrapper = function(err, result, ctx, config)
 		if get_mode() ~= "silence" or type(result) ~= "table" then
@@ -116,17 +129,20 @@ local function make_wrapper(original)
 		end
 
 		-- Shallow-copy the payload so we never mutate the object other
-		-- handlers (or the server adapter) may still be holding.
-		local patched = {
-			uri = result.uri,
-			kind = result.kind,
-			diagnostics = filtered,
-		}
+		-- handlers (or the server adapter) may still be holding. Forward
+		-- any extra fields (LSP 3.15+ publishDiagnostics carries `version`)
+		-- instead of rebuilding a partial payload.
+		local patched = vim.tbl_extend("force", result, { diagnostics = filtered })
 		return original(err, patched, ctx, config)
 	end
-	wrapped_handlers[wrapper] = true
+	wrappers[wrapper] = true
+	original_to_wrapper[original] = wrapper
 	return wrapper
 end
+
+-- clients we wrapped via attach_client -> their pre-wrap handler, so
+-- uninstall() can unwrap per-client tables too (not just the global one)
+local wrapped_clients = setmetatable({}, { __mode = "k" })
 
 function M.install()
 	if installed then
@@ -163,17 +179,27 @@ function M.attach_client(client)
 	if type(client.handlers) ~= "table" or get_mode() ~= "silence" then
 		return false
 	end
-	local wrapper = make_wrapper(client.handlers[PUBLISH])
+	local original = client.handlers[PUBLISH]
+	local wrapper = make_wrapper(original)
 	if not wrapper then
 		return false
 	end
 	client.handlers[PUBLISH] = wrapper
+	wrapped_clients[client] = original
 	return true
 end
 
 function M.uninstall()
 	if not installed then
 		return false
+	end
+	-- Unwrap per-client handler tables first (only where ours is still
+	-- installed — a restarted client's fresh table is left alone)
+	for client, original in pairs(wrapped_clients) do
+		if client.handlers and client.handlers[PUBLISH] == original_to_wrapper[original] then
+			client.handlers[PUBLISH] = original
+		end
+		wrapped_clients[client] = nil
 	end
 	vim.lsp.handlers["textDocument/publishDiagnostics"] = original_handler
 	original_handler = nil

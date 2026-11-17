@@ -125,9 +125,10 @@ function M.get(key)
 	return state[key]
 end
 
--- Set state value
-function M.set(key, value)
-	vim.validate({ key = { key, "string" } })
+-- Central setter honoring the persistence contract: direct state writes
+-- (including the convenience helpers below) must go through this so a key
+-- that ever becomes persistent actually schedules its save.
+local function set_state(key, value)
 	state[key] = value
 
 	-- Schedule debounced save if it's a persistent key
@@ -136,16 +137,25 @@ function M.set(key, value)
 	end
 end
 
+-- Set state value
+function M.set(key, value)
+	vim.validate({ key = { key, "string" } })
+	set_state(key, value)
+end
+
 -- Remove state value
 function M.remove(key)
 	vim.validate({ key = { key, "string" } })
 	state[key] = nil
+	if key:match("^persistent_") or key:match("^initialized_") then
+		schedule_save()
+	end
 end
 
 -- Track environment status
 function M.set_env_status(language, status)
-	state["env_" .. language] = status
-	state["env_" .. language .. "_time"] = os.time()
+	set_state("env_" .. language, status)
+	set_state("env_" .. language .. "_time", os.time())
 end
 
 -- Track package installation
@@ -153,13 +163,12 @@ function M.mark_package_installed(language, package)
 	local key = "installed_" .. language
 	local installed = state[key] or {}
 	installed[package] = os.time()
-	state[key] = installed
+	set_state(key, installed)
 end
 
 -- Track last check times
 function M.set_last_check(check_type, language)
-	local key = "last_check_" .. check_type .. "_" .. language
-	state[key] = os.time()
+	set_state("last_check_" .. check_type .. "_" .. language, os.time())
 end
 
 function M.get_last_check(check_type, language)
@@ -178,8 +187,8 @@ end
 
 -- Session tracking
 function M.start_session()
-	state.session_start = os.time()
-	state.session_id = vim.fn.tempname()
+	set_state("session_start", os.time())
+	set_state("session_id", vim.fn.tempname())
 end
 
 function M.get_session_duration()

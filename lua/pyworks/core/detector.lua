@@ -202,10 +202,15 @@ local function create_kernel_for_project(project_dir, venv_path, python_path, ca
 	local parent_name = vim.fn.fnamemodify(vim.fn.fnamemodify(project_dir, ":h"), ":t")
 
 	local kernel_name
-	if parent_name and parent_name ~= "" and parent_name ~= "/" and parent_name ~= "Users" then
-		kernel_name = (parent_name .. "_" .. project_name):lower():gsub("[^%w_]", "_")
-	else
+	local parent_dir = vim.fn.fnamemodify(project_dir, ":h")
+	-- Skip the parent component when it identifies the USER rather than
+	-- the project: the home directory itself (any OS), or macOS's "Users".
+	-- Kernel names like "james_myproj" (username-dependent) leak across
+	-- machines and collide between users.
+	if parent_name == "" or parent_name == "/" or parent_dir == vim.fn.expand("~") or parent_name == "Users" then
 		kernel_name = project_name:lower():gsub("[^%w_]", "_")
+	else
+		kernel_name = (parent_name .. "_" .. project_name):lower():gsub("[^%w_]", "_")
 	end
 
 	-- Check if ipykernel is installed (async import probe)

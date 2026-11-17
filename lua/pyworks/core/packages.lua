@@ -679,6 +679,19 @@ local function extract_python_imports(content)
 			return "import " .. table.concat(pkgs, ", ")
 		end)
 
+	-- Strip trailing/inline comments per line BEFORE import matching.
+	-- Without this, comment words inside a parenthesized multiline import
+	-- ("use the fast one") get extracted as import names — "comment" is a
+	-- real PyPI package, making this a live supply-chain suggestion.
+	local comment_stripped = {}
+	for line in normalized:gmatch("[^\r\n]+") do
+		-- Truncate at a # that is not inside a string literal is overkill
+		-- for import lines (imports rarely contain "#"); a simple split is
+		-- safe for the import-detection use case and avoids false imports.
+		table.insert(comment_stripped, (line:gsub("#.*$", "")))
+	end
+	normalized = table.concat(comment_stripped, "\n")
+
 	-- Process line by line
 	for line in normalized:gmatch("[^\r\n]+") do
 		-- Skip comments and empty lines

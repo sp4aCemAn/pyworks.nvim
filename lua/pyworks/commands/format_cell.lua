@@ -53,11 +53,16 @@ function M.format_current_cell(callback)
 	end
 
 	local cursor_line = vim.api.nvim_win_get_cursor(0)[1]
-	local region = find_enclosing_md_region(bufnr, cursor_line)
-	if not region then
+	local cell = cell_model.cell_at(bufnr, cursor_line)
+	if not cell or cell.marker_line == 0 or cell.type ~= "markdown" or cell.start_line > cell.end_line then
 		notifications.notify("Cursor is not inside a markdown cell", vim.log.levels.INFO)
 		return false
 	end
+	-- Identity of the cell at dispatch time: the formatter can run up to
+	-- 30s, and the callback must never paste output into line numbers that
+	-- mid-flight edits have moved.
+	local marker_line = cell.marker_line
+	local marker_text = cell.marker_text
 
 	local formatter = get_formatter()
 	if not formatter then
@@ -73,7 +78,7 @@ function M.format_current_cell(callback)
 		return false
 	end
 
-	local lines = vim.api.nvim_buf_get_lines(bufnr, region.start_line - 1, region.end_line, false)
+	local lines = vim.api.nvim_buf_get_lines(bufnr, cell.start_line - 1, cell.end_line, false)
 	local content = table.concat(percent_md.uncomment(lines), "\n") .. "\n"
 
 	local ok_start, _ = utils.async_system_call(formatter, function(success, stdout, stderr)
@@ -86,6 +91,10 @@ function M.format_current_cell(callback)
 		end
 
 		local new_lines = vim.split(stdout or "", "\n", { plain = true })
+		-- Strip exactly ONE trailing newline (the split artifact). Blank
+		-- lines BEYOND that are formatter-preserved content (e.g. a
+		-- trailing empty md line -> "#") and must survive the round-trip;
+		-- stripping all of them loses real empty lines.
 		if new_lines[#new_lines] == "" then
 			table.remove(new_lines)
 		end
@@ -96,25 +105,59 @@ function M.format_current_cell(callback)
 			return
 		end
 
-		vim.api.nvim_buf_set_lines(bufnr, region.start_line - 1, region.end_line, false, percent_md.comment(new_lines))
+		-- Re-resolve the cell; if the layout moved under us, bail instead
+		-- of writing the output into the wrong lines
+		local fresh = cell_model.cell_at(bufnr, marker_line)
+		if not fresh or fresh.marker_line ~= marker_line or fresh.marker_text ~= marker_text then
+			notifications.notify("Buffer changed while formatting; markdown cell left untouched", vim.log.levels.WARN)
+			if callback then
+				callback(false)
+			end
+			return
+		end
+
+		local ok_write = pcall(
+			vim.api.nvim_buf_set_lines,
+			bufnr,
+			fresh.start_line - 1,
+			fresh.end_line,
+			false,
+			percent_md.comment(new_lines)
+		)
+		if not ok_write then
+			notifications.notify("Cannot format: buffer is not modifiable", vim.log.levels.WARN)
+			if callback then
+				callback(false)
+			end
+			return
+		end
+
 		notifications.notify("Markdown cell formatted", vim.log.levels.INFO)
 		if callback then
 			callback(true)
 		end
 	end, { stdin = content })
 
+	-- async_system_call already reports spawn failures through the callback
 	if not ok_start then
-		notifications.notify_error("Failed to start markdown formatter")
 		return false
 	end
 
 	return true
 end
 
-vim.api.nvim_create_user_command("PyworksFormatMarkdownCell", function()
+vim.api.nvim_create_user_command("PyworksFormatMarkdownCell", function(ev)
+	if ev.range and ev.range > 1 then
+		notifications.notify(
+			"Format works on the markdown cell under the cursor; move into the cell and run it without a range",
+			vim.log.levels.WARN
+		)
+		return
+	end
 	M.format_current_cell()
 end, {
 	desc = "Format the markdown cell under the cursor with notebooks.md_formatter",
+	range = true,
 })
 
 M._find_enclosing_md_region = find_enclosing_md_region

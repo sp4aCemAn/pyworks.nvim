@@ -151,9 +151,11 @@ function M.venv_uses_uv(filepath)
 		end
 	end
 
-	-- Tertiary check: Check if pip is missing (UV venvs don't have pip by default)
+	-- Tertiary check: pip missing AND uv actually available. "pip missing"
+	-- alone misclassifies a pip venv whose pip was removed/upgraded away —
+	-- routing its installs through uv then fails confusingly.
 	local pip_path = venv_path .. "/bin/pip"
-	if vim.fn.executable(pip_path) == 0 then
+	if vim.fn.executable(pip_path) == 0 and vim.fn.executable("uv") == 1 then
 		-- No pip in venv is a strong indicator of UV
 		return true
 	end
@@ -308,6 +310,8 @@ function M.install_essentials(filepath)
 	check_missing(1, {}, function(missing_essentials)
 		if #missing_essentials == 0 then
 			state.set(install_key, nil)
+			-- Nothing was missing: the environment genuinely is ready
+			notifications.notify_environment_ready("python")
 			return
 		end
 
@@ -591,13 +595,19 @@ function M.install_packages(package_list, filepath, opts)
 					table.insert(all_output, "[STDERR] " .. line)
 				end
 
-				-- Create a detailed error buffer
+				-- Create a detailed error buffer (unique name: a second
+				-- failure while one is open would raise E95)
 				vim.cmd("new")
 				vim.bo.buftype = "nofile"
 				vim.bo.bufhidden = "wipe"
 				vim.bo.swapfile = false
 				vim.bo.filetype = "text"
-				vim.api.nvim_buf_set_name(0, "Package Installation Error")
+				for i = 0, 99 do
+					local name = "Package Installation Error" .. (i == 0 and "" or (" (" .. i .. ")"))
+					if pcall(vim.api.nvim_buf_set_name, 0, name) then
+						break
+					end
+				end
 
 				local error_report = {
 					"PACKAGE INSTALLATION FAILED",
@@ -681,13 +691,13 @@ function M.ensure_environment(filepath)
 		end
 	end
 
-	-- Step 2: Install essentials
+	-- Step 2: Install essentials (async). The "environment ready" notice
+	-- comes from install_essentials once its probe confirms nothing is
+	-- missing — notifying here would claim ready even when installation
+	-- never started or failed.
 	if config.auto_install_essentials then
 		M.install_essentials(filepath)
 	end
-
-	-- Step 3: Notify environment ready
-	notifications.notify_environment_ready("python")
 
 	return true
 end
@@ -711,10 +721,10 @@ function M.handle_file(filepath, opts)
 			notifications.notify_missing_packages(missing, "python")
 
 			-- Store missing packages for leader-pi command
-			state.set(state.KEYS.MISSING_PACKAGES .. "python", missing)
+			state.set(missing_packages_key(filepath), missing)
 		else
 			-- Clear any previous missing packages
-			state.remove(state.KEYS.MISSING_PACKAGES .. "python")
+			state.remove(missing_packages_key(filepath))
 		end
 	end)
 
@@ -725,9 +735,22 @@ function M.handle_file(filepath, opts)
 	end
 end
 
+-- Missing-packages state key honoring packages.sync_scope ("project":
+-- per-project lists, the Colab-like default; "global": one shared list)
+local function missing_packages_key(filepath)
+	local ok, pyworks = pcall(require, "pyworks")
+	local cfg = ok and pyworks.get_config and pyworks.get_config() or nil
+	local scope = (cfg and cfg.packages and cfg.packages.sync_scope) or "project"
+	if scope == "project" then
+		local project_dir = utils.get_project_paths(filepath)
+		return state.KEYS.MISSING_PACKAGES .. "python_" .. (project_dir or "global")
+	end
+	return state.KEYS.MISSING_PACKAGES .. "python"
+end
+
 -- Install missing packages command
 function M.install_missing_packages()
-	local missing = state.get(state.KEYS.MISSING_PACKAGES .. "python") or {}
+	local missing = state.get(missing_packages_key(get_current_filepath())) or {}
 
 	if #missing == 0 then
 		notifications.notify("No missing packages detected", vim.log.levels.INFO)
