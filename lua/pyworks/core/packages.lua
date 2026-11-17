@@ -896,15 +896,30 @@ function M.is_stdlib(module_name, language)
 	return false
 end
 
--- Validate package name for safety (prevents shell injection)
--- Package names should match PyPI naming: letters, numbers, hyphens, underscores, dots
+-- Validate package name for safety (prevents pip option injection and
+-- argument smuggling; all exec is array-form vim.system, so classic shell
+-- injection is not in play — but a name like "--index-url" would still be
+-- parsed by pip as an OPTION).
+-- Plain names: letters/digits, then _ . - [ ] (extras syntax).
+-- Optional PEP 440-ish specifier: comparison ops followed by digits/dots.
+local BODY = "[a-zA-Z0-9_][a-zA-Z0-9_.%-]*"
+local EXTRAS = "%[[a-zA-Z0-9_.,%-]*%]"
+local PACKAGE_PATTERNS = {
+	"^" .. BODY .. "$",
+	"^" .. BODY .. EXTRAS .. "$",
+	"^" .. BODY .. EXTRAS .. "[<>=!~]+[0-9.]+$",
+	"^" .. BODY .. "[<>=!~]+[0-9.]+$",
+}
 local function is_valid_package_name(name)
 	if not name or name == "" then
 		return false
 	end
-	-- PyPI package naming: alphanumeric, hyphens, underscores, dots, brackets for extras
-	-- Also allow version specifiers: ==, >=, <=, ~=, etc.
-	return name:match("^[a-zA-Z0-9_.%-]+[%[%]a-zA-Z0-9_.%-,]*[<>=!~]*[0-9.]*$") ~= nil
+	for _, pattern in ipairs(PACKAGE_PATTERNS) do
+		if name:find(pattern) then
+			return true
+		end
+	end
+	return false
 end
 
 -- Filter packages to only valid names
@@ -919,31 +934,6 @@ function M.validate_package_names(packages)
 		end
 	end
 	return valid, invalid
-end
-
--- Install packages (Python only)
-function M.install_packages(packages, language)
-	if #packages == 0 then
-		return
-	end
-
-	-- Validate package names before installation
-	local valid_packages, invalid_packages = M.validate_package_names(packages)
-	if #invalid_packages > 0 then
-		notifications.notify(
-			string.format("Skipping invalid package names: %s", table.concat(invalid_packages, ", ")),
-			vim.log.levels.WARN
-		)
-	end
-
-	if #valid_packages == 0 then
-		return
-	end
-
-	if language == "python" then
-		local python = require("pyworks.languages.python")
-		python.install_packages(valid_packages)
-	end
 end
 
 -- Re-scan imports after file save

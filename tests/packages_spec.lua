@@ -265,6 +265,42 @@ describe("packages", function()
 		end)
 	end)
 
+	describe("validate_package_names", function()
+		it("accepts plain PyPI names, extras, and version specifiers", function()
+			local valid = {
+				"requests",
+				"scikit-learn",
+				"some_pkg",
+				"my.pkg",
+				"l",
+				"requests[security]",
+				"numpy>=1.20",
+				"pandas==2.0.1",
+				"pkg!=1.2",
+				"pkg~=1.0",
+			}
+			local ok, invalid = packages.validate_package_names(valid)
+			assert.same(valid, ok)
+			assert.is_true(#invalid == 0)
+		end)
+
+		it("rejects pip option smuggling and malformed names", function()
+			local invalid_input = {
+				"--index-url",
+				"-y",
+				"--",
+				"",
+				"requests; rm -rf /",
+				"a b",
+				"pandas==",
+				"requests[",
+				"pkg,other",
+			}
+			local _, invalid = packages.validate_package_names(invalid_input)
+			assert.equals(#invalid_input, #invalid, "every malformed entry must be rejected")
+		end)
+	end)
+
 	describe("installed-packages cache keying and invalidation", function()
 		after_each(function()
 			package.loaded["pyworks.languages.python"] = nil

@@ -433,6 +433,18 @@ end
 function M.install_packages(package_list, filepath, opts)
 	vim.validate({ opts = { opts, "table", true } })
 	opts = opts or {}
+
+	-- Charset validation FIRST (before any venv work): rejects pip option
+	-- smuggling ("--index-url") and malformed names outright, on every path.
+	local valid_list, invalid_list = get_packages().validate_package_names(package_list)
+	if #invalid_list > 0 then
+		notifications.notify_error("Rejected invalid package name(s): " .. table.concat(invalid_list, ", "))
+	end
+	package_list = valid_list
+	if #package_list == 0 then
+		return false
+	end
+
 	filepath = filepath or get_current_filepath()
 	if not M.has_venv(filepath) then
 		if not M.create_venv(filepath) then
@@ -769,6 +781,16 @@ function M.uninstall_python_packages(packages_str)
 	-- Validate packages
 	pkg_list = error_handler.validate_packages(pkg_list, "Python")
 	if not pkg_list then
+		return
+	end
+
+	-- Charset validation: rejects pip option smuggling and malformed names
+	local valid_list, invalid_list = get_packages().validate_package_names(pkg_list)
+	if #invalid_list > 0 then
+		notifications.notify_error("Rejected invalid package name(s): " .. table.concat(invalid_list, ", "))
+	end
+	pkg_list = valid_list
+	if #pkg_list == 0 then
 		return
 	end
 

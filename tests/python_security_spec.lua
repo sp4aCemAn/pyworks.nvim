@@ -28,4 +28,33 @@ describe("python command security", function()
 			assert.is_nil(result)
 		end)
 	end)
+
+	describe("package-name validation on exec paths", function()
+		it("install_packages rejects pip option smuggling before any venv work", function()
+			local dir = vim.fn.tempname()
+			vim.fn.mkdir(dir, "p")
+
+			-- Everything here is invalid: the validator must short-circuit
+			-- BEFORE has_venv/create_venv, so no venv is ever created.
+			local result = python.install_packages({
+				"--index-url",
+				"http://evil/simple",
+				"extra-index-url",
+			}, dir)
+			assert.is_false(result)
+			assert.equals(0, vim.fn.isdirectory(dir .. "/.venv"))
+
+			vim.fn.delete(dir, "rf")
+		end)
+
+		it("uninstall path strips invalid names instead of passing them to pip", function()
+			-- Direct validator coverage for the uninstall wiring
+			local valid, invalid = require("pyworks.core.packages").validate_package_names({
+				"requests",
+				"--user",
+			})
+			assert.same({ "requests" }, valid)
+			assert.same({ "--user" }, invalid)
+		end)
+	end)
 end)

@@ -110,6 +110,20 @@ All notable changes to pyworks.nvim will be documented in this file.
 
 ### Fixed
 
+- **Package-name validation is now on every exec path** (security):
+  `validate_package_names` existed but was only reachable through a
+  `packages.install_packages` wrapper that had zero callers, so live paths
+  (`:PyworksSync`, `:PyworksAdd`, `:PyworksRemove`, essentials) passed
+  names straight to pip. The validator is now called first in
+  `python.install_packages` (before any venv work) and in the uninstall
+  path, rejecting malformed names outright — including pip **option
+  smuggling** like `--index-url` (all exec is array-form `vim.system`, so
+  shell injection was never possible, but pip would parse a leading `-` as
+  an option). The validator's charset also tightened: unbalanced extras
+  brackets rejected, specifiers require a version, no stray commas.
+  (Found while hardening: LuaJIT's pattern engine does not support `?`
+  applied to a capture group — `^a(b)?$` never matches; the validator now
+  uses four anchored patterns instead of one optional group.)
 - **Stale "missing packages" state after every install/uninstall**: the
   post-install callbacks invalidated the literal cache key
   `installed_packages_python`, which never existed — real keys are
