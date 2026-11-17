@@ -349,28 +349,42 @@ function M.setup_buffer_keymaps()
 			if not vim.b[bufnr].molten_initialized then
 				local ft = vim.bo.filetype
 				local filepath = vim.api.nvim_buf_get_name(bufnr)
-				local kernel = detector.get_kernel_for_language(ft, filepath)
+				-- Kernel resolution is async (no UI-thread blocking)
+				detector.get_kernel_for_language(ft, filepath, function(kernel)
+					-- Buffer may have changed while the lookup ran
+					if not vim.api.nvim_buf_is_valid(bufnr) then
+						return
+					end
+					if not (kernel and kernel:match("^[%w%-_%.]+$")) then
+						vim.notify("No suitable kernel found. Run :PyworksSetup to configure.", vim.log.levels.WARN)
+						return
+					end
 
-				if kernel and kernel:match("^[%w%-_%.]+$") then
 					vim.notify("Initializing " .. kernel .. " kernel...", vim.log.levels.INFO)
 					local ok =
 						error_handler.protected_call(vim.cmd, "Failed to initialize kernel", "MoltenInit " .. kernel)
-					if ok then
-						vim.b[bufnr].molten_initialized = true
+					if not ok then
+						vim.notify("Failed to initialize kernel: " .. kernel, vim.log.levels.WARN)
+						return
 					end
+					vim.b[bufnr].molten_initialized = true
 
 					-- Defer execution to allow kernel initialization to complete
 					vim.defer_fn(function()
+						-- Don't evaluate into a buffer the user has moved to
+						if vim.api.nvim_get_current_buf() ~= bufnr then
+							return
+						end
 						error_handler.protected_call(vim.cmd, "Failed to evaluate line", "MoltenEvaluateLine")
 						local cursor = vim.api.nvim_win_get_cursor(0)
 						local next_line = cursor[1] + 1
-						local last_line = vim.api.nvim_buf_line_count(0)
+						local last_line = vim.api.nvim_buf_line_count(bufnr)
 						if next_line <= last_line then
 							vim.api.nvim_win_set_cursor(0, { next_line, cursor[2] })
 						end
 					end, BUFFER_SETTLE_DELAY_MS)
-					return
-				end
+				end)
+				return
 			end
 
 			pcall(vim.cmd, "MoltenEvaluateLine")
@@ -378,7 +392,7 @@ function M.setup_buffer_keymaps()
 			-- Auto-advance to next line
 			local cursor = vim.api.nvim_win_get_cursor(0)
 			local next_line = cursor[1] + 1
-			local last_line = vim.api.nvim_buf_line_count(0)
+			local last_line = vim.api.nvim_buf_line_count(bufnr)
 			if next_line <= last_line then
 				vim.api.nvim_win_set_cursor(0, { next_line, cursor[2] })
 			end

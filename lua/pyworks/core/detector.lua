@@ -102,35 +102,79 @@ function M.handle_notebook(filepath)
 	M.handle_python_notebook(filepath)
 end
 
--- Get available kernels dynamically (with timeout to prevent UI blocking)
-local function get_available_kernels()
-	local success, result, _ =
-		utils.system_with_timeout({ "jupyter", "kernelspec", "list", "--json" }, KERNEL_LIST_TIMEOUT_MS)
-	if not success then
-		return {}
+-- Fetch + parse the kernelspec list once (async; UI never blocks).
+-- Cached under "kernel_list" (60s TTL). Callback receives
+--   { by_language = { <lang> = <kernel_name> },
+--     python_specs = { { name = ..., python = <argv[1]> }, ... } }
+-- or nil when jupyter is unavailable/failed.
+local function fetch_kernelspecs(callback)
+	local cached = cache.get("kernel_list")
+	if cached then
+		callback(cached)
+		return
 	end
 
-	local ok, data = pcall(vim.json.decode, result)
-	if not ok or not data.kernelspecs then
-		return {}
-	end
+	utils.async_system_call({ "jupyter", "kernelspec", "list", "--json" }, function(success, stdout)
+		if not success then
+			callback(nil)
+			return
+		end
+		local ok, data = pcall(vim.json.decode, stdout)
+		if not ok or type(data) ~= "table" or not data.kernelspecs then
+			callback(nil)
+			return
+		end
 
-	local kernels = {}
-	for name, spec in pairs(data.kernelspecs) do
-		if spec.spec and spec.spec.language then
-			local lang = spec.spec.language:lower()
-			-- Store the actual kernel name for each language
-			if not kernels[lang] then
-				kernels[lang] = name
+		local parsed = { by_language = {}, python_specs = {} }
+		for name, spec in pairs(data.kernelspecs) do
+			local spec_tbl = spec.spec
+			if spec_tbl and spec_tbl.language then
+				local lang = spec_tbl.language:lower()
+				if not parsed.by_language[lang] then
+					parsed.by_language[lang] = name
+				end
+				if lang == "python" and spec_tbl.argv and spec_tbl.argv[1] then
+					table.insert(parsed.python_specs, { name = name, python = spec_tbl.argv[1] })
+				end
 			end
 		end
-	end
-
-	return kernels
+		cache.set("kernel_list", parsed)
+		callback(parsed)
+	end, { timeout = KERNEL_LIST_TIMEOUT_MS })
 end
 
--- Find Python executable in venv
-local function find_python_in_venv(venv_path, filepath)
+-- Match a kernel whose python belongs to the project's venv.
+-- The prefix requires the "/" boundary: "/proj/.venv2" must NOT match
+-- a project whose venv is "/proj/.venv".
+local function match_kernel_in_specs(python_specs, venv_path, python_path)
+	local venv_prefix = venv_path .. "/"
+	for _, entry in ipairs(python_specs) do
+		local kernel_python = entry.python
+
+		if notifications.get_config().debug_mode then
+			notifications.notify(string.format("Kernel '%s' uses: %s", entry.name, kernel_python), vim.log.levels.DEBUG)
+		end
+
+		local is_exact_match = (kernel_python == python_path)
+		local is_venv_match = kernel_python:sub(1, #venv_prefix) == venv_prefix
+		if is_exact_match or is_venv_match then
+			notifications.notify(string.format("Found kernel '%s'", entry.name), vim.log.levels.INFO)
+			return entry.name
+		elseif notifications.get_config().debug_mode then
+			notifications.notify(
+				string.format("Kernel '%s' uses %s, not %s", entry.name, kernel_python, python_path),
+				vim.log.levels.DEBUG
+			)
+		end
+	end
+	return nil
+end
+
+-- Find a working Python executable in the venv. nil => the venv directory
+-- exists but contains no interpreter (broken/incomplete). Do NOT pretend a
+-- python exists: the caller reports the failure instead of feeding a
+-- phantom path into kernel matching/creation.
+local function find_python_in_venv(venv_path)
 	local candidates = {
 		venv_path .. "/bin/python",
 		venv_path .. "/bin/python3",
@@ -143,62 +187,17 @@ local function find_python_in_venv(venv_path, filepath)
 		end
 	end
 
-	-- No Python found - create venv
 	notifications.notify(
-		string.format("No Python found in venv: %s", venv_path),
+		string.format("No Python found in venv: %s. The venv is broken — recreate it with :PyworksSetup", venv_path),
 		vim.log.levels.WARN,
 		{ action_required = true }
 	)
-	local python_module = require("pyworks.languages.python")
-	python_module.create_venv(filepath)
-	return venv_path .. "/bin/python3"
-end
-
--- Find a kernel that matches the project's venv
-local function find_matching_kernel(venv_path, python_path)
-	local kern_success, result, _ =
-		utils.system_with_timeout({ "jupyter", "kernelspec", "list", "--json" }, KERNEL_LIST_TIMEOUT_MS)
-	if not kern_success then
-		return nil
-	end
-
-	local ok, data = pcall(vim.json.decode, result)
-	if not ok or not data.kernelspecs then
-		return nil
-	end
-
-	for name, spec in pairs(data.kernelspecs) do
-		if spec.spec and spec.spec.language and spec.spec.language:lower() == "python" then
-			if spec.spec.argv and spec.spec.argv[1] then
-				local kernel_python = spec.spec.argv[1]
-
-				if notifications.get_config().debug_mode then
-					notifications.notify(
-						string.format("Kernel '%s' uses: %s", name, kernel_python),
-						vim.log.levels.DEBUG
-					)
-				end
-
-				local is_exact_match = (kernel_python == python_path)
-				local is_venv_match = kernel_python:match("^" .. vim.pesc(venv_path))
-				if is_exact_match or is_venv_match then
-					notifications.notify(string.format("Found kernel '%s'", name), vim.log.levels.INFO)
-					return name
-				elseif notifications.get_config().debug_mode then
-					notifications.notify(
-						string.format("Kernel '%s' uses %s, not %s", name, kernel_python, python_path),
-						vim.log.levels.DEBUG
-					)
-				end
-			end
-		end
-	end
-
 	return nil
 end
 
--- Create a new kernel for the project
-local function create_kernel_for_project(project_dir, venv_path, python_path)
+-- Create a new kernel for the project (async; UI never blocks).
+-- Callback receives the kernel name, or nil on any failure.
+local function create_kernel_for_project(project_dir, venv_path, python_path, callback)
 	local project_name = vim.fn.fnamemodify(project_dir, ":t")
 	local parent_name = vim.fn.fnamemodify(vim.fn.fnamemodify(project_dir, ":h"), ":t")
 
@@ -209,71 +208,78 @@ local function create_kernel_for_project(project_dir, venv_path, python_path)
 		kernel_name = project_name:lower():gsub("[^%w_]", "_")
 	end
 
-	-- Check if ipykernel is installed
-	local check_cmd = { python_path, "-c", "import ipykernel" }
-	local check_success, _, _ = utils.system_with_timeout(check_cmd, KERNEL_LIST_TIMEOUT_MS)
-	if not check_success then
-		-- uv-created venvs have no bin/pip: point the user at a command
-		-- that will actually work for their package manager
-		local install_hint
-		if vim.fn.executable(venv_path .. "/bin/pip") == 1 then
-			install_hint = string.format("%s/bin/pip install ipykernel", venv_path)
-		elseif vim.fn.executable("uv") == 1 then
-			install_hint = string.format("uv pip install --python %s/bin/python ipykernel", venv_path)
-		else
-			install_hint = string.format("install ipykernel into the virtual environment at %s", venv_path)
+	-- Check if ipykernel is installed (async import probe)
+	utils.async_system_call({ python_path, "-c", "import ipykernel" }, function(check_success)
+		if not check_success then
+			-- uv-created venvs have no bin/pip: point the user at a command
+			-- that will actually work for their package manager
+			local install_hint
+			if vim.fn.executable(venv_path .. "/bin/pip") == 1 then
+				install_hint = string.format("%s/bin/pip install ipykernel", venv_path)
+			elseif vim.fn.executable("uv") == 1 then
+				install_hint = string.format("uv pip install --python %s/bin/python ipykernel", venv_path)
+			else
+				install_hint = string.format("install ipykernel into the virtual environment at %s", venv_path)
+			end
+			notifications.notify(
+				string.format("ipykernel not found in venv. Run: %s", install_hint),
+				vim.log.levels.ERROR,
+				{ action_required = true }
+			)
+			callback(nil)
+			return
 		end
+
 		notifications.notify(
-			string.format("ipykernel not found in venv. Run: %s", install_hint),
-			vim.log.levels.ERROR,
-			{ action_required = true }
+			string.format("Creating kernel '%s' for venv: %s", kernel_name, venv_path),
+			vim.log.levels.INFO
 		)
-		return nil
-	end
 
-	notifications.notify(
-		string.format("Creating kernel '%s' for venv: %s", kernel_name, venv_path),
-		vim.log.levels.INFO
-	)
+		local cmd = {
+			python_path,
+			"-m",
+			"ipykernel",
+			"install",
+			"--user",
+			"--name",
+			kernel_name,
+			"--display-name",
+			"Python (" .. project_name .. ")",
+		}
 
-	local cmd = {
-		python_path,
-		"-m",
-		"ipykernel",
-		"install",
-		"--user",
-		"--name",
-		kernel_name,
-		"--display-name",
-		"Python (" .. project_name .. ")",
-	}
-
-	local create_success, output, _ = utils.system_with_timeout(cmd, KERNEL_CREATE_TIMEOUT_MS)
-	if create_success then
-		notifications.notify(string.format("Created kernel '%s' -> %s", kernel_name, python_path), vim.log.levels.INFO)
-		cache.invalidate("kernel_list")
-		return kernel_name
-	end
-
-	notifications.notify(string.format("Failed to create kernel: %s", vim.trim(output)), vim.log.levels.ERROR)
-	return nil
+		utils.async_system_call(cmd, function(create_success, output)
+			if create_success then
+				notifications.notify(
+					string.format("Created kernel '%s' -> %s", kernel_name, python_path),
+					vim.log.levels.INFO
+				)
+				cache.invalidate("kernel_list")
+				callback(kernel_name)
+			else
+				notifications.notify(
+					string.format("Failed to create kernel: %s", vim.trim(output or "")),
+					vim.log.levels.ERROR
+				)
+				callback(nil)
+			end
+		end, { timeout = KERNEL_CREATE_TIMEOUT_MS })
+	end, { timeout = KERNEL_LIST_TIMEOUT_MS })
 end
 
-local function get_kernel_for_language(language, filepath)
+-- Resolve the kernel for a language (async).
+-- Callback receives the kernel name, or nil when none exists/could be created.
+local function get_kernel_for_language(language, filepath, callback)
 	-- For non-Python or no filepath: generic kernel lookup
 	if language:lower() ~= "python" or not filepath then
-		local cached_kernels = cache.get("kernel_list")
-		if not cached_kernels then
-			cached_kernels = get_available_kernels()
-			cache.set("kernel_list", cached_kernels)
-		end
-
-		local lang = language:lower()
-		local kernel = cached_kernels[lang]
-		if kernel then
-			notifications.notify(string.format("Using %s kernel: %s", language, kernel), vim.log.levels.INFO)
-		end
-		return kernel
+		fetch_kernelspecs(function(data)
+			local lang = language:lower()
+			local kernel = data and data.by_language[lang] or nil
+			if kernel then
+				notifications.notify(string.format("Using %s kernel: %s", language, kernel), vim.log.levels.INFO)
+			end
+			callback(kernel)
+		end)
+		return
 	end
 
 	-- Python with filepath: match kernel to project's venv
@@ -286,7 +292,11 @@ local function get_kernel_for_language(language, filepath)
 		)
 	end
 
-	local python_path = find_python_in_venv(venv_path, filepath)
+	local python_path = find_python_in_venv(venv_path)
+	if not python_path then
+		callback(nil)
+		return
+	end
 
 	if notifications.get_config().debug_mode then
 		notifications.notify(
@@ -296,17 +306,20 @@ local function get_kernel_for_language(language, filepath)
 	end
 
 	-- Try to find an existing matching kernel
-	local kernel = find_matching_kernel(venv_path, python_path)
-	if kernel then
-		return kernel
-	end
+	fetch_kernelspecs(function(data)
+		local kernel = data and match_kernel_in_specs(data.python_specs, venv_path, python_path) or nil
+		if kernel then
+			callback(kernel)
+			return
+		end
 
-	-- No matching kernel found - create one
-	notifications.notify(string.format("No kernel found for %s", project_dir), vim.log.levels.INFO)
-	return create_kernel_for_project(project_dir, venv_path, python_path)
+		-- No matching kernel found - create one
+		notifications.notify(string.format("No kernel found for %s", project_dir), vim.log.levels.INFO)
+		create_kernel_for_project(project_dir, venv_path, python_path, callback)
+	end)
 end
 
--- Initialize Molten automatically for the language
+-- Initialize Molten automatically for the language (async)
 local function auto_init_molten(language, filepath)
 	-- Check if Molten is available
 	if vim.fn.exists(":MoltenInit") ~= 2 then
@@ -325,15 +338,27 @@ local function auto_init_molten(language, filepath)
 	notifications.notify(string.format("Setting up %s kernel for execution...", language), vim.log.levels.INFO)
 
 	-- Get the actual kernel name for this language and project
-	local kernel = get_kernel_for_language(language, filepath)
+	get_kernel_for_language(language, filepath, function(kernel)
+		if not kernel then
+			-- No kernel found
+			vim.b[bufnr].molten_init_attempted = false -- Allow retry
+			notifications.notify("Python kernel not found. Run :PyworksSetup to configure.", vim.log.levels.WARN)
+			return
+		end
 
-	if kernel then
 		if not kernel:match("^[%w%-_%.]+$") then
 			notifications.notify(string.format("Invalid kernel name: %s", kernel), vim.log.levels.ERROR)
 			return
 		end
 
 		vim.defer_fn(function()
+			-- The kernel lookup is async; only init if the user hasn't
+			-- moved to a different buffer meanwhile
+			if vim.api.nvim_get_current_buf() ~= bufnr then
+				vim.b[bufnr].molten_init_attempted = false
+				return
+			end
+
 			-- Try to initialize the kernel
 			local ok, err = pcall(vim.cmd, "MoltenInit " .. kernel)
 			if ok then
@@ -356,11 +381,7 @@ local function auto_init_molten(language, filepath)
 				)
 			end
 		end, 200) -- Reduced to 200ms - just enough for buffer to settle
-	else
-		-- No kernel found
-		vim.b[bufnr].molten_init_attempted = false -- Allow retry
-		notifications.notify("Python kernel not found. Run :PyworksSetup to configure.", vim.log.levels.WARN)
-	end
+	end)
 end
 
 -- Python file handler
@@ -458,8 +479,14 @@ function M.rescan_imports(filepath)
 	end
 end
 
--- Export kernel detection for use in other modules
+-- Export kernel detection for use in other modules.
+-- ASYNC: get_kernel_for_language(language, filepath, callback) — the
+-- callback receives the kernel name or nil; nothing blocks the UI thread.
 M.get_kernel_for_language = get_kernel_for_language
+-- Test hooks (private-function convention: M._name)
+M._match_kernel_in_specs = match_kernel_in_specs
+M._find_python_in_venv = find_python_in_venv
+M._fetch_kernelspecs = fetch_kernelspecs
 -- Export for testing
 M.detect_notebook_language = detect_notebook_language
 

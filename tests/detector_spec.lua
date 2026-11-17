@@ -286,4 +286,57 @@ describe("detector", function()
 			assert.is_falsy(("python3; echo pwned"):match(safe_pattern))
 		end)
 	end)
+
+	describe("_match_kernel_in_specs", function()
+		it("matches a kernel whose python is inside the project venv", function()
+			local specs = {
+				{ name = "wrong", python = "/other/venv/bin/python" },
+				{ name = "right", python = "/proj/.venv/bin/python" },
+			}
+			assert.equals("right", detector._match_kernel_in_specs(specs, "/proj/.venv", "/proj/.venv/bin/python"))
+		end)
+
+		it("requires the path boundary (.venv2 must not match .venv)", function()
+			local specs = {
+				{ name = "venv2", python = "/proj/.venv2/bin/python" },
+			}
+			assert.is_nil(detector._match_kernel_in_specs(specs, "/proj/.venv", "/proj/.venv/bin/python"))
+		end)
+
+		it("matches an exact python path even outside the venv prefix", function()
+			local specs = {
+				{ name = "exact", python = "/usr/bin/python3" },
+			}
+			assert.equals("exact", detector._match_kernel_in_specs(specs, "/proj/.venv", "/usr/bin/python3"))
+		end)
+	end)
+
+	describe("_find_python_in_venv", function()
+		local tmp_base
+
+		before_each(function()
+			tmp_base = vim.fn.tempname()
+		end)
+
+		after_each(function()
+			vim.fn.delete(tmp_base, "rf")
+		end)
+
+		it("returns a working interpreter path", function()
+			local venv = tmp_base .. "/.venv"
+			vim.fn.mkdir(venv .. "/bin", "p")
+			vim.fn.writefile({ "#!/bin/sh" }, venv .. "/bin/python3")
+			vim.fn.setfperm(venv .. "/bin/python3", "rwxr-xr-x")
+
+			assert.equals(venv .. "/bin/python3", detector._find_python_in_venv(venv))
+		end)
+
+		it("returns nil (not a phantom path) for a broken venv", function()
+			-- venv directory exists but contains no interpreter
+			local venv = tmp_base .. "/.venv"
+			vim.fn.mkdir(venv, "p")
+
+			assert.is_nil(detector._find_python_in_venv(venv))
+		end)
+	end)
 end)
