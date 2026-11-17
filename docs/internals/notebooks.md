@@ -11,26 +11,27 @@ recursed into E132 stack overflows.
   cwd `.venv`, `~/.local/bin`, parent-dir venv; **prepends the found dir to
   `vim.env.PATH`** (line 158-164) so bare `jupytext`/`jupyter` resolve to
   the sandbox/project later (mutating process env — tests rely on this).
-- `is_jupytext_installed` (line 19): cached (`jupytext_installed`, TTL 1h):
-  PATH check → venv binary → `python -c "import jupytext"` fallback.
-  `install_jupytext` (line 85) exists but is effectively unused (jupytext
-  ships with essentials now).
-- Converters are blocking `vim.system(...):wait()` — read: `--to py:percent
-  --output -` (line 173); write: stdin `--to ipynb` (line 196).
+- `is_jupytext_installed` (cached, TTL 1h): PATH check → venv binary →
+  `python -c "import jupytext"` fallback (30s timeout).
+  `install_jupytext` picks the install command by what is actually present:
+  venv `bin/pip` → `uv pip --python <interpreter>` → `python -m pip`
+  (v0.4.0: uv venvs have no pip and the old chain always failed on them).
+- Converters are blocking but BOUNDED (`utils.system_with_timeout`,
+  30s): read `--to py:percent --output -`; write stdin `--to ipynb`.
 
-## Handlers (setup_notebook_handler, line 321)
+## Handlers (setup_notebook_handler)
 
 | autocmd | behavior |
 |---|---|
-| BufReadCmd `*.ipynb` | skip if `processing_buffers[buf]`; missing file → error buffer; else `read_notebook` (line 219) |
-| BufWriteCmd `*.ipynb` | `write_notebook` (line 287) → converts back, writes raw, clears `modified` |
+| BufReadCmd `*.ipynb` | skip if `processing_buffers[buf]`; missing file → error buffer; else `read_notebook` |
+| BufWriteCmd `*.ipynb` | `write_notebook` → converts back, **atomic save** (v0.4.0: validated as nbformat JSON, written to `<target>.tmp` in the same dir, then renamed over the target — a failed/truncated conversion leaves the on-disk notebook untouched), clears `modified` |
 
 `read_notebook`: disables swapfile, converts, `nvim_buf_set_lines` +
 `filetype=python` + `modified=false`, stashes `b:pyworks_notebook_path`
 (used by BufWriteCmd) and `b:pyworks_notebook_loaded`. On conversion failure
-→ falls back to read-only JSON view (`filetype=json`) with guidance
-notifications. The whole body is pcall'd so `processing_buffers[bufnr]`
-(line 15, cleared line 279) never sticks.
+→ falls back to a locked JSON view (`filetype=json`) whose notifications
+explain the retry path (`:PyworksSetup` then `:PyworksReloadNotebook`).
+The whole body is pcall'd so `processing_buffers[bufnr]` never sticks.
 
 ## The reload problem & recursion_guard (core/recursion_guard.lua)
 
@@ -48,15 +49,21 @@ Guard state machine (module-level `state`, line 18):
 - `force_reset` (line 166) + `:PyworksResetReloadGuard` (line 191) =
   emergency recovery; `BufDelete` autocmd (line 32) prevents map leaks.
 
-Entry point: `reload_notebook_buffer` in plugin/pyworks.lua:176 — checks
-guard, MoltenDeinit (stale extmarks), ensure handler configured,
-`:edit fnameescape(path)`, verify first line isn't `{`, retry once with
-`edit!`. Callers:
-- `:PyworksReloadNotebook` (plugin/pyworks.lua:234)
-- BufWinEnter fallback (line 342): buffer empty-or-JSON after 500ms defer,
-  double-checked inside the deferred callback with `b:pyworks_notebook_processing`
-- SessionLoadPost (line 258): MoltenDeinit all notebooks synchronously, then
-  reload them **sequentially** at 600ms spacing (> debounce 500ms, intentional)
+Entry point: `reload_notebook_buffer` in plugin/pyworks.lua — checks the
+guard, **refuses modified buffers unless forced** (v0.4.0:
+`:PyworksReloadNotebook!` discards; without bang the user gets an
+actionable warning), MoltenDeinit (stale extmarks) + clears
+`b:molten_initialized`, ensures the handler is configured,
+`:edit fnameescape(path)`, verifies first line isn't `{`, retries once
+with `edit!`. Callers:
+- `:PyworksReloadNotebook` (bang-aware)
+- BufWinEnter fallback: buffer empty-or-JSON after 500ms defer,
+  double-checked inside the deferred callback with
+  `b:pyworks_notebook_processing` (a busy recursion guard now re-queues a
+  hint instead of silently abandoning the notebook)
+- SessionLoadPost: MoltenDeinit all notebooks synchronously (+ flag
+  reset), then reload them **sequentially** at 600ms spacing (> debounce
+  500ms, intentional)
 
 ## Notebook creation (commands/create.lua)
 

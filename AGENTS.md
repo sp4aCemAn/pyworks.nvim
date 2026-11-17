@@ -130,28 +130,43 @@ pattern if you touch either module.
   add any legitimately popular neighbor that false-positives (precedent:
   `httpie` sits 2 edits from `httpx`).
 - Prefer `utils.system_with_timeout` / `utils.async_system_call` over raw
-  `vim.system` in library code; always pass `text = true`.
-- User commands belong in `setup()` or `plugin/pyworks.lua` — note that
-  ~10 currently register at `init.lua` module-load time (known wart; when
-  moving them, `integration_spec.lua` asserts the full expected command
-  list).
+  `vim.system` in library code; always pass `text = true`. Environment
+  probes are async since v0.4.0 — keep new probes callback-based.
+- User commands belong in `setup()` or `plugin/pyworks.lua` (the v0.4.0
+  hygiene sweep moved the module-load registrations into `setup()`;
+  `integration_spec.lua` asserts the full expected command list).
+- **LuaJIT pattern quirk**: `?` applied to a CAPTURE group never matches
+  (`^a(b)?$` is nil!). Use alternation-free anchored patterns or put `?`
+  inside the group. Verified in the container while hardening
+  `validate_package_names`.
+- **Lua locals must be defined BEFORE their first call site**: a local
+  function defined below its caller resolves as a global nil at that call
+  site. This bit `missing_packages_key` (caught by the e2e smoke) and
+  `register_manual_commands` (caught at test time). Keep helper functions
+  above their users.
 
 ## Known open bugs — flag, don't silently "fix"
 
-Found in the 2026-11 code review; they need dedicated changes with their
-own tests, not drive-by edits:
+**None currently open.** The five 2026-11-14 review bugs were fixed in the
+v0.4.0 remediation sweep (each with its own tests):
 
-1. **Version drift**: `init.lua` header says 3.0.3, CHANGELOG latest is
-   0.3.0, `pyproject.toml` says 1.0.0, README FAQ references v3.0.3.
-2. `utils.find_project_root()` never returns nil (falls back to
-   `start_dir`), so `is_pyworks_project()` in `plugin/pyworks.lua` is
-   always true and "project-only" gating is dead code.
-3. `python.check_compatibility()` computes `major + minor/10`, so Python
-   3.10 becomes `3.1` and miscompares against two-digit thresholds.
-4. Sync `jupyter kernelspec list` / pip calls run on the UI thread in
-   `detector.lua` and `diagnostics.lua` (blocking up to 10–30s).
-5. `jupytext.install_jupytext` uses `venv/bin/pip`, which fails on
-   uv-created venvs (no pip present).
+1. ~~Version drift~~ → all surfaces now 0.4.0 (pyproject/init/README/doc,
+   CHANGELOG cut to [0.4.0]).
+2. ~~`is_pyworks_project` always true~~ → the dead gates were removed;
+   doctrine documented in `docs/internals/detection.md` (every Python file
+   IS a project).
+3. ~~`check_compatibility` version math~~ → the function had ZERO callers;
+   deleted rather than fixed.
+4. ~~Blocking kernelspec/pip on the UI thread~~ → kernels path and the
+   installed-package/essentials chain are fully async (see
+   `docs/internals/execution.md` / `environment.md`); remaining sync sites
+   are user-invoked and timeout-bounded.
+5. ~~`jupytext.install_jupytext` uses `venv/bin/pip`~~ → uv-aware install
+   chain (`uv pip --python` / venv pip / `-m pip`).
+
+New findings from the 2026-11-16 review were also all fixed in v0.4.0
+(see CHANGELOG [0.4.0]). When re-reviewing, anything new gets its own
+entry here again — with tests — instead of drive-by edits.
 
 ## Tests
 

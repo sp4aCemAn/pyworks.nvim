@@ -8,19 +8,21 @@ guards exist; understand both before touching anything here.
 
 ```
 file saved/opened
- └─ detector.rescan_imports (detector.lua:441)
-     └─ packages.rescan_for_language (packages.lua:928)
+ └─ detector.rescan_imports
+     └─ packages.rescan_for_language (async internally)
          ├─ cache.invalidate("imports_<path>_<lang>")
-         ├─ scan_imports (line 694) ────────────── cached per path+lang
+         ├─ scan_imports ────────────── cached per path+lang
          │    notebook (.ipynb) → reads BUFFER (post-jupytext percent form)
-         │    plain file → disk, size-capped at 1 MiB (line 9; enforced line 742)
-         │    └─ extract_python_imports (line 614)
-         ├─ detect_missing_packages (line 792)
-         │    per import: skip stdlib (line 870) / custom (line 820)
-         │    → map_import_to_package (line 581)
+         │    plain file → disk, size-capped at 1 MiB (enforced in scan)
+         │    └─ extract_python_imports (comment text stripped first, v0.4.0)
+         ├─ detect_missing_packages (ASYNC: installed list via callback;
+         │    cached per PROJECT root under "installed_packages_<lang>_<root>")
+         │    per import: skip stdlib / custom
+         │    → map_import_to_package
          │    → not in installed set? → missing
-         └─ notifications.notify_missing_packages (line 181 notifications)
+         └─ notifications.notify_missing_packages
               user presses <leader>pi → python.install_missing_packages
+              (state key scoped by packages.sync_scope: "project" default)
 ```
 
 ## Extraction details (extract_python_imports, packages.lua:614)
@@ -49,18 +51,25 @@ file saved/opened
 
 ## Guards (in order, all before any subprocess)
 
-1. `is_valid_package_name` (line 879) → regex whitelist
-   (`^[a-zA-Z0-9_.%-]+...`) — ASCII-only, blocks shell injection AND unicode
-   homoglyphs. `validate_package_names` (line 889) splits valid/invalid.
-2. `is_typosquat` (line 380) / `filter_typosquats` (line 410):
-   `normalize_package_name` (line 315, PEP-503-ish: lower, collapse
-   `[-._]+`→`-`), then three rules in order: (1) exact known name in any
+1. `is_valid_package_name` → four anchored patterns (v0.4.0, replaces the
+   old permissive regex): name body `[A-Za-z0-9_][A-Za-z0-9_.%-]*` plus an
+   optional BALANCED extras group, optional version specifier
+   (`<ops><digits/dots>`). Leading `-` is rejected outright — that is pip
+   **option injection**, not a name (array-form argv prevents shell
+   injection; pip would still parse `--index-url` as its own option).
+   NOTE (LuaJIT): the patterns avoid `(...)?` — LuaJIT's pattern engine
+   does not support `?` applied to a capture group. `validate_package_names`
+   splits valid/invalid and is called FIRST in `python.install_packages`
+   (before any venv work) and in the uninstall path.
+2. `is_typosquat` / `filter_typosquats`:
+   `normalize_package_name` (PEP-503-ish: lower, collapse `[-._]+`→`-`),
+   then three rules in order: (1) exact known name in any
    spelling → safe; (2) **prefix-squat** — candidate (≥5 chars) that is a
    proper prefix of a known package is flagged with the closest/shortest
-   such name (`scikit`→`scikit-learn`, `panda`→`pandas`); (3) bounded
-   Levenshtein via `edit_distance_at_most` (line 322): ≤2 edits (≤3-char
-   names: 1). Version specifiers/extras stripped before matching
-   (`numpy[extra]>=2` → base `numpy`).
+   such name; (3) bounded Levenshtein via `edit_distance_at_most`:
+   ≤2 edits (≤3-char names: 1). Version specifiers/extras stripped before
+   matching. **Equal-distance ties resolve lexicographically** (v0.4.0) so
+   the reported canonical name is deterministic across processes.
 
 ## Enforcement points (python.lua:433 install_packages)
 

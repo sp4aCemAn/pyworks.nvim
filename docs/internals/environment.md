@@ -22,16 +22,16 @@ The venv location itself is decided by `utils.get_project_paths`
 
 1. `uv.lock` at project root → uv
 2. `pyvenv.cfg` contains `uv = ` or `uv-version = ` lines → uv
-3. **no `bin/pip` in the venv → uv** (assumption: uv never installs pip
-   unless asked). This heuristic *fails open*: a broken/empty venv or a
-   `python -m venv --without-pip` venv is misdetected as uv.
+3. **no `bin/pip` in the venv AND `uv` on PATH → uv** (hardened v0.4.0:
+   "pip missing" alone misclassified a pip venv whose pip was upgraded
+   away). Still fails open for broken venvs when uv happens to exist.
 
 `get_package_manager(filepath)` python.lua:165 — decision table:
 
 | venv exists? | uv-created? | uv binary? | result |
 |---|---|---|---|
 | yes | yes | yes | `uv pip` |
-| yes | yes | no | venv pip (usually absent → errors; known bug #5 cousin) |
+| yes | yes | no | venv pip (usually absent → errors) |
 | yes | no | any | **venv's own pip** (deliberate: never uv for pip-venvs) |
 | no | — | config.use_uv && uv | `uv` (will create) |
 | no | — | — | `pip` |
@@ -40,19 +40,23 @@ Command construction goes through `build_pip_command` python.lua:199 —
 whitelisted actions only (`VALID_PIP_ACTIONS` line 193), package lists are
 appended **as argv elements** (never shell strings).
 
-## essentials — python.lua:272
+## essentials — python.lua (fully async)
 
 `install_essentials(filepath)`: guarded per-project by
-`state["installing_essentials_<dir>"]` (async re-entrance guard line 276-281)
-→ create venv if missing → check each `config.essentials` via
-`is_package_installed` (line 374 — runs `venv/bin/python -c import X`, 5s
-timeout, import name resolved through `packages.map_package_to_import`) →
+`state["installing_essentials_<dir>"]` (set for the whole probe+install
+window) → create venv if missing → probe each `config.essentials` via
+`is_package_installed_async` (sequential async `import X` checks; the SYNC
+`is_package_installed` remains for `:checkhealth` only) →
 `uv pip install`/`venv/bin/pip install` async → on success mark state +
-invalidate `installed_packages_python`. Pip path also fires-and-forgets a
-`pip install --upgrade pip` first (line 326).
+invalidate `^installed_packages_` (pattern — the old literal key never
+matched the real per-project keys). The fire-and-forget
+`pip install --upgrade pip` (raced the essentials install on the same
+venv) was REMOVED v0.4.0.
 
-Throttling: `ensure_environment` python.lua:617 is rate-limited by
-`state.should_check("python_env","python",30)` — 30s, per nvim session.
+Throttling: `ensure_environment` is rate-limited by
+`state.should_check("python_env","python",30)` — 30s, per nvim session;
+its "environment ready" notice only fires from the probe path when
+nothing was missing.
 
 ## python3_host_prog
 

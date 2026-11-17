@@ -17,41 +17,40 @@ Neovim ≥ 0.10. Entry points: `plugin/pyworks.lua` (autocmds) and
 
 ## Current state (2026-11-16)
 
-- Branch `lspcleanup` (from `3dfd75c`), PUSHED through `7e5fd59`; PR not yet
-  opened. Notebook LSP/markdown work landed as S1–S9 (see CHANGELOG
-  [Unreleased]) and was verified end-to-end against the user's real config
-  (nvim 0.12.6 + mason pylsp + jupytext 1.19.3, host macOS).
-- **F1–F6 Model A foundation refactor COMPLETE (this session, local
-  commits `b82fab4..0c95343`, not yet pushed)**:
-  F1 `core/cell_model.lua` (canonical cells + cell_at/markers/
-  markdown_regions/for_buffer/is_marker_line; get_markdown_regions shim);
-  F2 `notebook/percent_md.lua` (comment/uncomment codec; golden test
-  against real jupytext 1.19.3 in container); F3 consumers migrated —
-  run-all (`<leader>jR`) now model-driven, **fixes the bnW double-execution
-  bug** (regression spec drives the real keymap with an async Molten stub);
-  F4 lsp.lua + format_cell use the model/codec (formatter round-trips
-  commented md — no h1-soup); F5 dead `markdown_hl.lua` +
-  `notebooks.markdown_highlight` removed; F6 `notebook/md_view.lua`
-  inline `# ` concealment (`md_conceal` default true; `md_fold_default`
-  false). SPIKE FIRST done and render-verified via an ext_linegrid
-  msgpack-RPC driver — findings incl. the `^`-must-lead-each-`\|`-branch
-  trap + "`\%>=` doesn't exist" + "conceal unmeasurable headless-without-
-  UI" are in UX_MODEL_A_REFACTOR.md and AGENTS.md gotchas.
-  Gates: host suite green at every slice (~345 tests), container unit ALL
-  green incl. golden test, container e2e unchanged 7/9 (2 red = KNOWN
-  upstream Molten iopub bug, thread #1). stylua clean; selene not installed
-  locally (CI job will judge).
-- HEAD `e09e27e` era: code review outcomes, typosquat guard,
-  recursion_guard fix, container test env.
-- Test suite (containerized): `unit` ALL GREEN (~315 tests incl. new
-  cell_model/percent_md/md_view specs), `scenarios` 17/17, `e2e` 7/9 — the
-  2 red steps are a KNOWN UPSTREAM Molten bug (see below), NOT pyworks
-  regressions.
+- **v0.4.0 full-review remediation sweep COMPLETE** on branch `lspcleanup`
+  (commits `f592b02..eb44800`, stacked on the F1-F6 work; nothing pushed).
+  17 slices: atomic .ipynb save; reload safety (`!`-forced); run-all guard +
+  per-iteration revalidation; installed-packages cache fix (pattern
+  invalidation + per-project keys); dead-code deletion (check_compatibility,
+  wrap, PERSISTENT_JUPYTEXT, dead gates); package-name validation on every
+  exec path (+ pip option guard); typosquat lexicographic tie-break;
+  uv-aware jupytext install; md_view window lifecycle + no fold churn;
+  cell-model memoization (818ms→30ms fold pass); kernels + packages chain
+  fully async (UI never blocks on probes); stderr surfacing + bounded
+  `:wait()` everywhere; `packages.sync_scope` config (Colab-style
+  per-project missing packages); `<leader>jm` format key (jfm alias);
+  support-module polish; commands into `setup()`; version 0.4.0 + upstream
+  dep refs; docs refreshed.
+- Gates: container `unit` ALL green (~380 tests), `scenarios` 17/17,
+  `e2e` 7/9 — the 2 red steps remain the KNOWN-UPSTREAM Molten bug
+  (thread #1). stylua clean; selene left to CI.
+- Two NEW gotchas added to AGENTS.md from this sweep: LuaJIT `(...)?`
+  pattern quirk; locals-must-precede-callers (the latter was CAUGHT BY THE
+  E2E SMOKE as a real nil-call on the file-open path — keep that run honest).
 - Everything about running/testing: `test/README.md` +
   `test/ENVIRONMENT_PLAN.md` (design, findings, security posture).
 
 ## Decisions (dated, with rationale pointers)
 
+- **2026-11-16** — **v0.4.0 remediation sweep adopted**: every HIGH/MEDIUM/
+  LOW finding from the fresh full review got its own slice+commit+tests
+  (17 commits); no backlog left. Key calls: version canonicalized DOWN to
+  0.4.0 (next-minor scheme, not pyproject's stray 1.0.0); deps point at
+  upstream molten/image (2026-11-15 decision finally applied to
+  lazy.lua/README/doc); `packages.sync_scope = "project"` default for
+  Colab-like per-project missing packages; `:PyworksAdd`-style option
+  smuggling (`--index-url`) is a charset-validation concern, not shell
+  injection (array argv).
 - **2026-11-16** — **Model A "Folded Notebook" adopted** after S5/S9
   investigation proved jupytext percent CANONICALLY comments markdown cells
   and `pythonComment` makes syntax-region md highlighting dead on real
@@ -102,34 +101,16 @@ Neovim ≥ 0.10. Entry points: `plugin/pyworks.lua` (autocmds) and
    kernel venv contents all exonerated; standalone jupyter_client works) in
    `test/ENVIRONMENT_PLAN.md` findings §4. Next action: upstream issue with
    `test/env/e2e_smoke.lua` as repro. Also verify once in an interactive
-   `shell` session (headless may be the differentiator).
-2. **Version drift** (AGENTS.md bug #1): init.lua header 3.0.3 vs CHANGELOG
-   0.3.0 vs pyproject 1.0.0 vs README FAQ "v3.0.3". Needs one canonical
-   scheme + a dedicated commit.
-3. **Fork references** in `lazy.lua`/README/doc still point at `jeryldev/*`
-   while the decision is upstream (see Decisions 2026-11-15).
-4. AGENTS.md known-bugs #2–#5 (`is_pyworks_project` always-true,
-   `check_compatibility` version math, blocking kernelspec probes,
-   jupytext pip-in-uv-venv) — open, each needs own change + tests.
-5. (2026-11-16, from this branch's test fixes) `is_typosquat` resolves
-   equal-distance ties by `pairs()` iteration order — nondeterministic
-   canonical across processes. Tests now tie-tolerant; real fix = stable
-   tie-break (e.g. lexicographic) + determinism test.
- 6. **F1–F6 foundation refactor — COMPLETE 2026-11-16** (`b82fab4..
-    0c95343` on `lspcleanup`, LOCAL/UNPUSHED). Model A presentation layer
-    shipped: cell model, percent_md codec, consumer migration (run-all
-    double-execution fixed), formatter comment round-trip, markdown_hl
-    removed, inline md concealment (spike verified against a real
-    ext_linegrid render). NEXT ACTIONS: (a) push + open the PR; (b)
-    interactive eyeball of F6 feel on the user's real config — cursor
-    motion through the hidden prefix & insert-boundary UX CANNOT be
-    asserted automatically (spike finding #1c); tweak
-    `concealcursor`/scope or flip `md_conceal` default based on that
-    report; (c) F6 note: `cell_fold_expr` calls `cell_at` per md marker
-    (O(n²) on huge notebooks — profile if real ones feel slow).
-7. Two remaining 2026-11 review findings still not in AGENTS known-bugs:
-   installed-packages `invalidate` key mismatch; `validate_package_names`
-   absent from the live exec path. Flag-only; each needs own change+tests.
+   `shell` session (headless may be the differentiator). **7/9 is the
+   baseline — any run-all/polling change must keep exactly that.**
+2. **Push + PR for `lspcleanup`**: F1-F6 + the v0.4.0 sweep are all local.
+   No PRs/pushes until the user asks.
+3. **Interactive eyeball of F6 concealment** on the user's real config:
+   cursor motion through the hidden prefix & insert-boundary UX cannot be
+   asserted automatically (spike finding #1c); tweak `concealcursor`/scope
+   or flip `md_conceal` default based on that report.
+4. **Warm cache before container runs on a cold sandbox** (`warm` is the
+   only network-privileged step). Never mount host `$HOME`.
 
 ## Where things live
 
