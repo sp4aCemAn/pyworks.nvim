@@ -110,6 +110,14 @@ All notable changes to pyworks.nvim will be documented in this file.
 
 ### Fixed
 
+- **Run-all (`<leader>jR`) hardening**: a second press while a run is in
+  progress is refused instead of starting an interleaved sequence that
+  double-executed cells against the shared Out[N] completion counter, and
+  each iteration revalidates the buffer and the cell's live position in the
+  cell model before dispatching — mid-run edits or buffer switches (up to
+  30s per cell of exposure) abort the run with a notice instead of
+  executing stale line ranges. Markdown/empty cells are no longer marked
+  green ("executed") before the skip check.
 - **Failed notebook saves can no longer corrupt the on-disk `.ipynb`**:
   `:w` on a notebook buffer previously truncated the target file at open
   and wrote jupytext's output directly — a failed/truncated conversion or a

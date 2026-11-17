@@ -575,6 +575,98 @@ describe("keymaps", function()
 			})
 			assert.same({ { 2, 2 } }, calls)
 		end)
+
+		it("refuses a second <leader>jR while a run is in progress (no doubled execution)", function()
+			local lines = { "# %%", "a = 1", "# %%", "b = 2" }
+			vim.api.nvim_buf_set_lines(test_bufnr, 0, -1, false, lines)
+			vim.b[test_bufnr].molten_initialized = true
+			vim.api.nvim_win_set_cursor(0, { 1, 0 })
+			local ns = vim.api.nvim_create_namespace("molten-extmarks")
+			vim.api.nvim_buf_clear_namespace(test_bufnr, ns, 0, -1)
+			vim.g._test_run_all_eval = {}
+			vim.g._test_run_all_queue = {}
+			keymaps._invalidate_molten_ns_cache()
+			keymaps.setup_buffer_keymaps()
+
+			local callback
+			for _, map in ipairs(vim.api.nvim_buf_get_keymap(test_bufnr, "n")) do
+				if map.lhs and map.lhs:match("jR$") then
+					callback = map.callback
+				end
+			end
+			assert.is_function(callback, "<leader>jR must be mapped when Molten is available")
+
+			callback()
+			callback() -- second press mid-run: must be refused, not interleaved
+			assert.is_true(
+				vim.wait(500, function()
+					for _, note in ipairs(notes) do
+						if note:match("already in progress") then
+							return true
+						end
+					end
+					return false
+				end),
+				"second run-all press must be refused with a notice"
+			)
+
+			local done = vim.wait(8000, function()
+				for _, note in ipairs(notes) do
+					if note:match("All cells executed") then
+						return true
+					end
+				end
+				return false
+			end, 25)
+			assert.is_true(done, "the (single) run must still finish")
+			assert.same({ { 2, 2 }, { 4, 4 } }, vim.g._test_run_all_eval)
+		end)
+
+		it("aborts when the buffer is edited mid-run (stale snapshot)", function()
+			local lines = { "# %%", "a = 1", "# %%", "b = 2" }
+			vim.api.nvim_buf_set_lines(test_bufnr, 0, -1, false, lines)
+			vim.b[test_bufnr].molten_initialized = true
+			vim.api.nvim_win_set_cursor(0, { 1, 0 })
+			local ns = vim.api.nvim_create_namespace("molten-extmarks")
+			vim.api.nvim_buf_clear_namespace(test_bufnr, ns, 0, -1)
+			vim.g._test_run_all_eval = {}
+			vim.g._test_run_all_queue = {}
+			keymaps._invalidate_molten_ns_cache()
+			keymaps.setup_buffer_keymaps()
+
+			local callback
+			for _, map in ipairs(vim.api.nvim_buf_get_keymap(test_bufnr, "n")) do
+				if map.lhs and map.lhs:match("jR$") then
+					callback = map.callback
+				end
+			end
+			assert.is_function(callback, "<leader>jR must be mapped when Molten is available")
+
+			callback()
+			assert.is_true(
+				vim.wait(2000, function()
+					return #vim.g._test_run_all_eval >= 1
+				end, 10),
+				"first cell should dispatch"
+			)
+
+			-- Delete the second cell's marker while the run is between cells:
+			-- every remaining snapshot range is now stale and must not execute.
+			vim.api.nvim_buf_set_lines(test_bufnr, 2, 3, false, {})
+
+			assert.is_true(
+				vim.wait(8000, function()
+					for _, note in ipairs(notes) do
+						if note:match("Run all aborted") then
+							return true
+						end
+					end
+					return false
+				end, 25),
+				"run-all must abort on mid-run layout change"
+			)
+			assert.same({ { 2, 2 } }, vim.g._test_run_all_eval)
+		end)
 	end)
 
 	describe("event suppression", function()

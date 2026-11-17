@@ -25,6 +25,11 @@ local BUFFER_SETTLE_DELAY_MS = 100
 local POLL_INTERVAL_MS = 150 -- How often to check for cell completion
 local CELL_TIMEOUT_MS = 30000 -- Maximum wait time per cell (30 seconds)
 
+-- Run-all in-progress flags, keyed by bufnr. A second <leader>jR while a
+-- run is active would start an interleaved sequence that double-executes
+-- cells against the shared Out[N] completion counter.
+local run_all_in_progress = {}
+
 -- Debug log file (set vim.g.pyworks_debug_file = "/tmp/pyworks.log" to enable)
 local function debug_log(msg)
 	local log_file = vim.g.pyworks_debug_file
@@ -449,7 +454,15 @@ function M.setup_buffer_keymaps()
 				return
 			end
 
-			-- Step 1: canonical cells from the model (marker cells only)
+			-- In-progress guard: one run-all at a time per buffer
+			if run_all_in_progress[bufnr] then
+				vim.notify("Run all already in progress in this buffer", vim.log.levels.WARN)
+				return
+			end
+
+			-- Step 1: canonical cells from the model (marker cells only).
+			-- Cell line numbers are a snapshot; every iteration revalidates
+			-- against the live buffer before dispatching (staleness below).
 			local cells = {}
 			for _, cell in ipairs(require("pyworks.core.cell_model").markers(bufnr)) do
 				table.insert(cells, cell)
@@ -461,6 +474,13 @@ function M.setup_buffer_keymaps()
 			end
 
 			vim.notify(string.format("Running %d cells...", #cells), vim.log.levels.INFO)
+			run_all_in_progress[bufnr] = true
+
+			-- Abort helper: drop the in-progress flag so a future run is possible
+			local function abort_run(reason)
+				run_all_in_progress[bufnr] = nil
+				vim.notify("Run all aborted: " .. reason, vim.log.levels.WARN)
+			end
 
 			-- Step 2: recursive function to execute cells one by one
 			-- Each call handles one cell, then schedules the next via vim.defer_fn
@@ -473,6 +493,7 @@ function M.setup_buffer_keymaps()
 
 				-- Base case: all cells handled — park the cursor at the last one
 				if i > #cells then
+					run_all_in_progress[bufnr] = nil
 					with_suppressed_events(function()
 						ui.enter_cell(cells[#cells].marker_line, { insert_mode = false })
 					end)
@@ -481,13 +502,37 @@ function M.setup_buffer_keymaps()
 				end
 
 				local cell = cells[i]
-				ui.mark_cell_executed(cell.index)
+
+				-- Revalidate before each dispatch. Each cell can wait up to 30s,
+				-- so mid-run edits/buffer switches are likely; executing a stale
+				-- snapshot range would run the WRONG lines.
+				if not vim.api.nvim_buf_is_valid(bufnr) then
+					run_all_in_progress[bufnr] = nil
+					return
+				end
+				if vim.api.nvim_get_current_buf() ~= bufnr then
+					abort_run("buffer switched during run")
+					return
+				end
+				local fresh_cell = require("pyworks.core.cell_model").cell_at(bufnr, cell.marker_line)
+				if
+					not fresh_cell
+					or fresh_cell.marker_line ~= cell.marker_line
+					or fresh_cell.marker_text ~= cell.marker_text
+				then
+					abort_run("buffer edited during run (cell layout changed)")
+					return
+				end
+				cell = fresh_cell
 
 				-- Skip markdown (no executable code) and empty cells (by range)
 				if cell.type == "markdown" or cell.start_line > cell.end_line then
 					schedule_next()
 					return
 				end
+
+				-- Mark executed only for cells that actually dispatch
+				ui.mark_cell_executed(cell.index)
 
 				-- Execute the cell over its exact model range
 				local ok = pcall(vim.fn.MoltenEvaluateRange, cell.start_line, cell.end_line)
