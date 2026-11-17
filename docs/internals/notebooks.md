@@ -11,26 +11,27 @@ recursed into E132 stack overflows.
   cwd `.venv`, `~/.local/bin`, parent-dir venv; **prepends the found dir to
   `vim.env.PATH`** (line 158-164) so bare `jupytext`/`jupyter` resolve to
   the sandbox/project later (mutating process env — tests rely on this).
-- `is_jupytext_installed` (line 19): cached (`jupytext_installed`, TTL 1h):
-  PATH check → venv binary → `python -c "import jupytext"` fallback.
-  `install_jupytext` (line 85) exists but is effectively unused (jupytext
-  ships with essentials now).
-- Converters are blocking `vim.system(...):wait()` — read: `--to py:percent
-  --output -` (line 173); write: stdin `--to ipynb` (line 196).
+- `is_jupytext_installed` (cached, TTL 1h): PATH check → venv binary →
+  `python -c "import jupytext"` fallback (30s timeout).
+  `install_jupytext` picks the install command by what is actually present:
+  venv `bin/pip` → `uv pip --python <interpreter>` → `python -m pip`
+  (v0.4.0: uv venvs have no pip and the old chain always failed on them).
+- Converters are blocking but BOUNDED (`utils.system_with_timeout`,
+  30s): read `--to py:percent --output -`; write stdin `--to ipynb`.
 
-## Handlers (setup_notebook_handler, line 321)
+## Handlers (setup_notebook_handler)
 
 | autocmd | behavior |
 |---|---|
-| BufReadCmd `*.ipynb` | skip if `processing_buffers[buf]`; missing file → error buffer; else `read_notebook` (line 219) |
-| BufWriteCmd `*.ipynb` | `write_notebook` (line 287) → converts back, writes raw, clears `modified` |
+| BufReadCmd `*.ipynb` | skip if `processing_buffers[buf]`; missing file → error buffer; else `read_notebook` |
+| BufWriteCmd `*.ipynb` | `write_notebook` → converts back, **atomic save** (v0.4.0: validated as nbformat JSON, written to `<target>.tmp` in the same dir, then renamed over the target — a failed/truncated conversion leaves the on-disk notebook untouched), clears `modified` |
 
 `read_notebook`: disables swapfile, converts, `nvim_buf_set_lines` +
 `filetype=python` + `modified=false`, stashes `b:pyworks_notebook_path`
 (used by BufWriteCmd) and `b:pyworks_notebook_loaded`. On conversion failure
-→ falls back to read-only JSON view (`filetype=json`) with guidance
-notifications. The whole body is pcall'd so `processing_buffers[bufnr]`
-(line 15, cleared line 279) never sticks.
+→ falls back to a locked JSON view (`filetype=json`) whose notifications
+explain the retry path (`:PyworksSetup` then `:PyworksReloadNotebook`).
+The whole body is pcall'd so `processing_buffers[bufnr]` never sticks.
 
 ## The reload problem & recursion_guard (core/recursion_guard.lua)
 
@@ -48,15 +49,21 @@ Guard state machine (module-level `state`, line 18):
 - `force_reset` (line 166) + `:PyworksResetReloadGuard` (line 191) =
   emergency recovery; `BufDelete` autocmd (line 32) prevents map leaks.
 
-Entry point: `reload_notebook_buffer` in plugin/pyworks.lua:176 — checks
-guard, MoltenDeinit (stale extmarks), ensure handler configured,
-`:edit fnameescape(path)`, verify first line isn't `{`, retry once with
-`edit!`. Callers:
-- `:PyworksReloadNotebook` (plugin/pyworks.lua:234)
-- BufWinEnter fallback (line 342): buffer empty-or-JSON after 500ms defer,
-  double-checked inside the deferred callback with `b:pyworks_notebook_processing`
-- SessionLoadPost (line 258): MoltenDeinit all notebooks synchronously, then
-  reload them **sequentially** at 600ms spacing (> debounce 500ms, intentional)
+Entry point: `reload_notebook_buffer` in plugin/pyworks.lua — checks the
+guard, **refuses modified buffers unless forced** (v0.4.0:
+`:PyworksReloadNotebook!` discards; without bang the user gets an
+actionable warning), MoltenDeinit (stale extmarks) + clears
+`b:molten_initialized`, ensures the handler is configured,
+`:edit fnameescape(path)`, verifies first line isn't `{`, retries once
+with `edit!`. Callers:
+- `:PyworksReloadNotebook` (bang-aware)
+- BufWinEnter fallback: buffer empty-or-JSON after 500ms defer,
+  double-checked inside the deferred callback with
+  `b:pyworks_notebook_processing` (a busy recursion guard now re-queues a
+  hint instead of silently abandoning the notebook)
+- SessionLoadPost: MoltenDeinit all notebooks synchronously (+ flag
+  reset), then reload them **sequentially** at 600ms spacing (> debounce
+  500ms, intentional)
 
 ## Notebook creation (commands/create.lua)
 
@@ -67,6 +74,73 @@ guard, MoltenDeinit (stale extmarks), ensure handler configured,
 check → `configure_notebook_handler()` + `edit!`. If jupytext is missing it
 creates the file but tells the user to `:PyworksSetup`. If jupytext will be
 installed later in-session, poll marker every 1s × 30 (VENV_CHECK_*, line 14).
+
+## LSP & markdown ergonomics in notebook buffers (2026-11)
+
+Canonical jupytext percent COMMENTS markdown bodies (valid Python), but raw
+lines typed mid-session — or non-canonical percent files — break both the
+python LSP and markdown rendering. Modules: LSP silencing + the formatter
+(F4 wires them to the canonical cell model / percent_md codec), and inline
+concealment chrome (F6). Richer markdown *styling* (bold/headings as
+graphics) stays markview.nvim territory.
+The S5 `notebook/markdown_hl.lua` syntax-region approach was removed in F5:
+`pythonComment` outranks any same-position region, so it could never render
+on real (filetype=python) buffers — see docs/UX_MODEL_A_REFACTOR.md.
+
+- **`notebook/lsp.lua`** — `install()` (from `setup()`, init.lua:300) wraps
+  `vim.lsp.handlers["textDocument/publishDiagnostics"]`; for notebook
+  buffers (identified by `b:pyworks_notebook_path`, fallback `%.ipynb$`
+  buffer name) in mode `"silence"` it drops diagnostics whose start line
+  falls in a markdown region (`core/cell_model.lua` `markdown_regions` —
+  the canonical model since F4; `cell_engine.get_markdown_regions` remains
+  as a delegating shim) and forwards everything
+  else to the saved original handler. Payloads are shallow-copied only when
+  something is dropped.
+  Handler wrapping is idempotent via a weak-key registry (`wrapped_handlers`
+  — functions can't carry flags in Lua 5.1). **Client-snapshot gotcha**:
+  nvim snapshots `vim.lsp.handlers` at client start, so `install()` also
+  sweeps running clients and `attach_client()` re-wraps per client from the
+  `LspAttach` autocmd   — covers the common case of pylsp already running for
+  `.py` files when a notebook lazy-load first fires `setup()`.
+  **ctx.bufnr gotcha (S9)**: nvim >= 0.12 delivers publishDiagnostics with
+  `ctx.bufnr = nil`; `resolve_bufnr()` falls back to
+  `vim.uri_to_bufnr(result.uri)` — without it the notebook check silently
+  fails and every diagnostic leaks (the exact real-world bug users hit).
+  `"detach"` mode is handled by the `LspAttach` autocmd
+  (plugin/pyworks.lua:169) → `maybe_detach()` (client:detach_buffer on
+  0.11+, vim.lsp.buf_detach_client fallback on 0.10). `"attach"` installs
+   nothing.
+- **`commands/format_cell.lua`** — `:PyworksFormatMarkdownCell` /
+  `<leader>jfm` (keymaps.lua tail): region via
+  `_find_enclosing_md_region` (now a `cell_model.cell_at` call-through, F4 —
+  marker line counts as inside; code/preamble/empty → refuse). Canonical
+  md content is **uncommented** (`notebook/percent_md.lua`) before being
+  piped async through `notebooks.md_formatter` and **re-commented** before
+  the content range is rewritten (`utils.async_system_call` gained `stdin`
+  passthrough, utils.lua:269; buffer touched only on exit 0). Skipping the
+   comment/uncomment step would feed pandoc `# text` as an H1 and drop raw
+   Python lines back into the buffer ("h1 soup").
+- **`notebook/md_view.lua`** (F6) — inline markdown concealment chrome.
+  `setup()` (from `setup()`, init.lua after `lsp.install()`) registers the
+  `PyworksMdView` autocmds; `refresh(bufnr)` rebuilds, for every window on
+  the buffer, ONE window-local `matchadd` whose pattern alternates
+  `^#\s\?\%>{start-1}l\%<{end+1}l` per markdown region (ranges from
+  `cell_model.markdown_regions`; matches keyed per window id in
+  `win_matches`, rebuilt debounced 150ms on `TextChanged*`/`BufWritePost`,
+  immediate on `BufWinEnter`/`WinEnter`). Sets `conceallevel=2`
+  `concealcursor=nvi` so the cursor line always shows the real prefix.
+  `md_fold_default` additionally sets `foldlevel=1` with `ui.cell_fold_expr`
+  returning `>2` for markdown markers / `>1` for code (collapses md cells
+  only). Gated by `notebooks.md_conceal` (default true); no-op on
+  non-notebook buffers. **Spike-verified regex facts** (see
+  UX_MODEL_A_REFACTOR.md "F6 SPIKE findings"): `^` must LEAD each `\|`
+  branch (atoms-first breaks every branch after the first), inclusive
+  `\%>=`/`\%<=` don't exist (use `\%>{n-1}l`), and concealment is
+  unobservable headless without a real UI.
+
+Config: `notebooks = { lsp, md_formatter, md_conceal, md_fold_default }`
+(init.lua:63); `md_formatter` uses replace semantics on merge
+(init.lua:274) because `tbl_deep_extend` index-merges arrays.
 
 ## Invariants
 

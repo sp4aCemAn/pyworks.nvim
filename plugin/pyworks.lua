@@ -15,14 +15,6 @@ end
 -- Create autocmd group for pyworks
 local augroup = vim.api.nvim_create_augroup("Pyworks", { clear = true })
 
--- Check if a file is in a pyworks-managed directory using utils.find_project_root
-local function is_pyworks_project(filepath)
-	local dir = filepath and vim.fn.fnamemodify(filepath, ":h") or vim.fn.getcwd()
-	local utils = require("pyworks.utils")
-	local project_root = utils.find_project_root(dir)
-	return project_root ~= nil
-end
-
 -- Set up autocmds for file detection
 vim.api.nvim_create_autocmd({ "BufReadPost", "BufNewFile" }, {
 	group = augroup,
@@ -34,19 +26,6 @@ vim.api.nvim_create_autocmd({ "BufReadPost", "BufNewFile" }, {
 
 		-- Use the full path for project detection
 		local check_path = full_path ~= "" and full_path or ev.file
-
-		-- For Python files, ALWAYS run pyworks (it will create venv if needed)
-		-- For other languages, check for project markers
-		local ext = vim.fn.fnamemodify(check_path, ":e")
-		local ft = vim.bo[bufnr].filetype
-
-		-- Always process Python files and notebooks
-		if ext ~= "py" and ext ~= "ipynb" and ft ~= "python" then
-			-- For non-Python files, check for project markers
-			if not is_pyworks_project(check_path) then
-				return
-			end
-		end
 
 		-- Debug: Show that autocmd fired
 		if vim.g.pyworks_debug then
@@ -68,11 +47,6 @@ vim.api.nvim_create_autocmd("BufWritePost", {
 	group = augroup,
 	pattern = { "*.py", "*.ipynb" },
 	callback = function(ev)
-		-- Only run in project directories (check the file's location)
-		if not is_pyworks_project(ev.file) then
-			return
-		end
-
 		vim.defer_fn(function()
 			local detector = require("pyworks.core.detector")
 			detector.rescan_imports(ev.file)
@@ -95,17 +69,9 @@ vim.api.nvim_create_autocmd("FileType", {
 		local config = pyworks.get_config()
 		local skip_keymaps = config.skip_keymaps
 
-		-- Only set up keymaps in project directories (check the file's location)
-		local filepath = vim.api.nvim_buf_get_name(ev.buf)
-		if not is_pyworks_project(filepath) then
-			-- Still set up Molten keymaps even outside projects (unless skip_keymaps)
-			if not skip_keymaps then
-				local keymaps = require("pyworks.keymaps")
-				keymaps.setup_buffer_keymaps()
-				keymaps.setup_molten_keymaps()
-			end
-			return
-		end
+		-- NOTE: there is no "project-only" gate here: find_project_root()
+		-- always resolves (fallback = file dir / cwd), so the old gate was
+		-- dead code. Zero-config doctrine: every Python file IS a project.
 
 		-- Skip all keymaps if user requested
 		if skip_keymaps then
@@ -115,11 +81,10 @@ vim.api.nvim_create_autocmd("FileType", {
 			return
 		end
 
-		-- Package installation keymap
-		vim.keymap.set("n", "<leader>pi", function()
-			local python = require("pyworks.languages.python")
-			python.install_missing_packages()
-		end, { buffer = true, desc = "Pyworks: Install missing packages" })
+		-- Package installation is handled by the single global ft-gated
+		-- <leader>pi -> :PyworksSync map (setup()); a buffer-local duplicate
+		-- shadowed it with divergent behavior.
+		local filepath = vim.api.nvim_buf_get_name(ev.buf)
 
 		-- Set up cell execution keymaps for Molten
 		local keymaps = require("pyworks.keymaps")
@@ -163,6 +128,25 @@ vim.api.nvim_create_autocmd("FileType", {
 	desc = "Pyworks: Set up language-specific keymaps and auto-init for notebooks",
 })
 
+-- Detach LSP clients from notebook buffers when notebooks.lsp = "detach".
+-- Mode and notebook checks happen inside maybe_detach(), so this autocmd is
+-- inert in silence/attach modes and for non-notebook buffers.
+vim.api.nvim_create_autocmd("LspAttach", {
+	group = augroup,
+	callback = function(ev)
+		local ok, notebook_lsp = pcall(require, "pyworks.notebook.lsp")
+		if not ok then
+			return
+		end
+		local client = vim.lsp.get_client_by_id(ev.data.client_id)
+		if client then
+			pcall(notebook_lsp.attach_client, client)
+			pcall(notebook_lsp.maybe_detach, ev.buf, client)
+		end
+	end,
+	desc = "Pyworks: Detach LSP clients from notebook buffers (notebooks.lsp = 'detach')",
+})
+
 -- Helper function to reload a notebook buffer properly
 -- Follows the same pattern as open_and_verify_notebook in commands/create.lua
 --
@@ -188,6 +172,14 @@ local function reload_notebook_buffer(filepath, opts)
 		return false
 	end
 
+	-- Refuse to silently discard unsaved edits; :edit would fail with E37
+	-- anyway — surface the actionable escape instead. force (command bang)
+	-- opts in to discarding.
+	if vim.bo[bufnr].modified and not opts.force then
+		vim.notify("Notebook buffer has unsaved edits; save or use :PyworksReloadNotebook!", vim.log.levels.WARN)
+		return false
+	end
+
 	-- Begin protected reload operation
 	local release = guard.begin_reload(bufnr)
 
@@ -197,6 +189,9 @@ local function reload_notebook_buffer(filepath, opts)
 		-- This prevents IndexError when Molten tries to access invalid extmark positions
 		if vim.fn.exists(":MoltenDeinit") == 2 then
 			pcall(vim.cmd, "MoltenDeinit")
+			-- The flag outlives :edit (same buffer object); stale "initialized"
+			-- makes run-all/evaluate silently fail post-reload
+			vim.b[bufnr].molten_initialized = nil
 		end
 
 		-- Ensure notebook handler is configured before reloading
@@ -204,7 +199,7 @@ local function reload_notebook_buffer(filepath, opts)
 		jupytext.configure_notebook_handler()
 
 		-- Use :edit to open fresh from disk - this triggers BufReadCmd
-		local ok = pcall(vim.cmd, "edit " .. vim.fn.fnameescape(filepath))
+		local ok = pcall(vim.cmd, (opts.force and "edit! " or "edit ") .. vim.fn.fnameescape(filepath))
 
 		if ok then
 			-- Verify conversion worked (buffer should NOT start with '{')
@@ -231,7 +226,8 @@ local function reload_notebook_buffer(filepath, opts)
 end
 
 -- Manual command to reload current notebook (useful after session restore)
-vim.api.nvim_create_user_command("PyworksReloadNotebook", function()
+-- Bang (!) discards unsaved buffer edits; without it a modified buffer is refused.
+vim.api.nvim_create_user_command("PyworksReloadNotebook", function(ev)
 	local filepath = vim.api.nvim_buf_get_name(0)
 	if not filepath:match("%.ipynb$") then
 		vim.notify("Not a notebook file", vim.log.levels.WARN)
@@ -246,8 +242,8 @@ vim.api.nvim_create_user_command("PyworksReloadNotebook", function()
 		vim.notify("Buffer name: " .. vim.api.nvim_buf_get_name(0), vim.log.levels.INFO)
 		return
 	end
-	reload_notebook_buffer(filepath)
-end, { desc = "Reload current notebook with jupytext conversion" })
+	reload_notebook_buffer(filepath, { force = ev.bang == "!" })
+end, { desc = "Reload current notebook with jupytext conversion", bang = true })
 
 -- Handle session restore: re-trigger notebook conversion for .ipynb files
 -- Session restore bypasses BufReadCmd, leaving notebooks blank or as raw JSON
@@ -271,6 +267,8 @@ vim.api.nvim_create_autocmd("SessionLoadPost", {
 						vim.api.nvim_buf_call(bufnr, function()
 							pcall(vim.cmd, "MoltenDeinit")
 						end)
+						-- Keep the buffer flag in sync with the deinit
+						vim.b[bufnr].molten_initialized = nil
 					end
 				end
 			end
@@ -376,9 +374,19 @@ vim.api.nvim_create_autocmd("BufWinEnter", {
 
 			-- Defer to let other handlers complete first
 			vim.defer_fn(function()
-				-- Re-check recursion guard in deferred callback
+				-- Re-check recursion guard in deferred callback. A reload in
+				-- progress elsewhere must not strand this notebook as raw
+				-- JSON: re-queue instead of silently abandoning.
 				if guard.is_reloading() then
 					pcall(vim.api.nvim_buf_del_var, ev.buf, "pyworks_notebook_processing")
+					vim.defer_fn(function()
+						if vim.api.nvim_buf_is_valid(ev.buf) and guard.is_reloading() then
+							vim.notify(
+								"[pyworks] Notebook reload still busy; run :PyworksReloadNotebook to retry conversion",
+								vim.log.levels.WARN
+							)
+						end
+					end, 1500)
 					return
 				end
 

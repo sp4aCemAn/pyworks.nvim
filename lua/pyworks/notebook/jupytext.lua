@@ -5,8 +5,11 @@ local M = {}
 
 local cache = require("pyworks.core.cache")
 local notifications = require("pyworks.core.notifications")
-local state = require("pyworks.core.state")
 local utils = require("pyworks.utils")
+
+-- Bound on jupytext conversions (read/write). A wedged jupytext must not
+-- hang the editor forever.
+local JUPYTEXT_CONVERSION_TIMEOUT_MS = 30000
 
 -- Augroup for notebook handling
 local augroup = vim.api.nvim_create_augroup("PyworksNotebook", { clear = true })
@@ -40,13 +43,11 @@ function M.is_jupytext_installed(filepath)
 		end
 	end
 
-	-- Fallback: check if Python can import jupytext
+	-- Fallback: check if Python can import jupytext (30s timeout)
 	local python_path = M.get_python_for_jupytext(filepath)
 	if python_path then
-		local ok, result = pcall(function()
-			return vim.system({ python_path, "-c", "import jupytext" }, { text = true }):wait()
-		end)
-		if ok and result and result.code == 0 then
+		local ok = utils.system_with_timeout({ python_path, "-c", "import jupytext" }, 30000)
+		if ok then
 			cache.set(cache_key, true)
 			return true
 		end
@@ -81,6 +82,23 @@ function M.get_python_for_jupytext(filepath)
 	return nil
 end
 
+-- Build the jupytext install command for a python interpreter.
+-- uv-created venvs have NO bin/pip (and no pip module), so those route
+-- through `uv pip` against the interpreter; the bin/pip and -m pip
+-- branches only run when pip is actually present.
+local function build_install_command(python_path, venv_path)
+	local in_venv = venv_path and python_path:match(vim.pesc(venv_path)) ~= nil
+	if in_venv and vim.fn.executable(venv_path .. "/bin/pip") == 1 then
+		return { venv_path .. "/bin/pip", "install", "jupytext" }
+	end
+	if in_venv and vim.fn.executable("uv") == 1 then
+		return { "uv", "pip", "install", "--python", python_path, "jupytext" }
+	end
+	return { python_path, "-m", "pip", "install", "jupytext" }
+end
+
+M._build_install_command = build_install_command
+
 -- Install jupytext
 function M.install_jupytext(filepath)
 	local python_path = M.get_python_for_jupytext(filepath)
@@ -91,14 +109,7 @@ function M.install_jupytext(filepath)
 
 	notifications.progress_start("jupytext_install", "Installing Jupytext", "Installing notebook viewer...")
 
-	-- Determine pip command based on project
-	local _, venv_path = utils.get_project_paths(filepath)
-	local cmd
-	if venv_path and python_path:match(vim.pesc(venv_path)) then
-		cmd = { venv_path .. "/bin/pip", "install", "jupytext" }
-	else
-		cmd = { python_path, "-m", "pip", "install", "jupytext" }
-	end
+	local cmd = build_install_command(python_path, select(2, utils.get_project_paths(filepath)))
 
 	-- Use vim.system for modern Neovim 0.10+
 	local ok, _ = pcall(vim.system, cmd, { text = true }, function(obj)
@@ -106,7 +117,6 @@ function M.install_jupytext(filepath)
 			if obj.code == 0 then
 				cache.invalidate("jupytext_installed")
 				notifications.progress_finish("jupytext_install", "Jupytext installed successfully")
-				state.set(state.KEYS.PERSISTENT_JUPYTEXT, true)
 			else
 				notifications.progress_finish("jupytext_install")
 				notifications.notify_error("Failed to install jupytext")
@@ -155,12 +165,20 @@ function M.find_jupytext_cli(filepath)
 
 	for _, path in ipairs(venv_paths) do
 		if vim.fn.executable(path) == 1 then
-			-- Add directory to PATH if not already present (prevents accumulation)
+			-- Add directory to PATH if not already present (prevents
+			-- accumulation). Exact-entry match: a substring/prefix match
+			-- would skip prepending when a DIFFERENT directory sharing the
+			-- prefix (/a/b vs /a/b2) is already on PATH.
 			local dir = vim.fn.fnamemodify(path, ":h")
-			local current_path = vim.env.PATH or ""
-			local path_pattern = vim.pesc(dir) .. "[:\n]?"
-			if not current_path:match("^" .. path_pattern) and not current_path:match(":" .. path_pattern) then
-				vim.env.PATH = dir .. ":" .. current_path
+			local already = false
+			for entry in (vim.env.PATH or ""):gmatch("[^:\n]+") do
+				if entry == dir then
+					already = true
+					break
+				end
+			end
+			if not already then
+				vim.env.PATH = dir .. ":" .. (vim.env.PATH or "")
 			end
 			return path
 		end
@@ -176,20 +194,21 @@ local function convert_ipynb_to_percent(filepath)
 		return nil, "jupytext CLI not found"
 	end
 
-	local result = vim.system({
+	-- Bounded: a wedged jupytext must not hang the editor forever
+	local success, output = utils.system_with_timeout({
 		jupytext_cmd,
 		"--to",
 		"py:percent",
 		"--output",
 		"-",
 		filepath,
-	}, { text = true }):wait()
+	}, JUPYTEXT_CONVERSION_TIMEOUT_MS)
 
-	if result.code ~= 0 then
-		return nil, result.stderr or "jupytext conversion failed"
+	if not success then
+		return nil, output ~= "" and output or "jupytext conversion failed"
 	end
 
-	return result.stdout, nil
+	return output, nil
 end
 
 -- Convert percent-format Python script back to .ipynb using jupytext CLI
@@ -199,20 +218,21 @@ local function convert_percent_to_ipynb(content, filepath)
 		return nil, "jupytext CLI not found"
 	end
 
-	local result = vim.system({
+	-- Bounded: a wedged jupytext must not hang the editor forever
+	local success, output = utils.system_with_timeout({
 		jupytext_cmd,
 		"--to",
 		"ipynb",
 		"--output",
 		"-",
 		"-",
-	}, { text = true, stdin = content }):wait()
+	}, JUPYTEXT_CONVERSION_TIMEOUT_MS, { stdin = content })
 
-	if result.code ~= 0 then
-		return nil, result.stderr or "jupytext conversion failed"
+	if not success then
+		return nil, output ~= "" and output or "jupytext conversion failed"
 	end
 
-	return result.stdout, nil
+	return output, nil
 end
 
 -- Read notebook and convert to percent format
@@ -259,7 +279,10 @@ local function read_notebook(bufnr, filepath)
 					if convert_err then
 						notifications.notify("Error: " .. convert_err, vim.log.levels.DEBUG)
 					end
-					notifications.notify("Run :PyworksSetup to install jupytext", vim.log.levels.INFO)
+					notifications.notify(
+						"Run :PyworksSetup to install jupytext, then :PyworksReloadNotebook to retry",
+						vim.log.levels.INFO
+					)
 				end)
 			else
 				vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {
@@ -268,6 +291,7 @@ local function read_notebook(bufnr, filepath)
 					"File: " .. filepath,
 					"",
 					"Run :PyworksSetup to configure Python environment",
+					"then :PyworksReloadNotebook to retry conversion",
 				})
 				vim.bo[bufnr].filetype = "text"
 				vim.bo[bufnr].modifiable = false
@@ -281,6 +305,48 @@ local function read_notebook(bufnr, filepath)
 	if not ok then
 		error(err)
 	end
+end
+
+-- Atomically write converted ipynb content: validate it is real notebook
+-- JSON BEFORE touching the target, write to a temp file in the same
+-- directory, then rename over the target. Any failure leaves the
+-- original file untouched (a truncated or failed conversion must never
+-- destroy the on-disk notebook).
+local function write_ipynb_content(filepath, ipynb_content)
+	if type(ipynb_content) ~= "string" or ipynb_content == "" then
+		return false, "conversion produced no output"
+	end
+
+	local ok_json, decoded = pcall(vim.fn.json_decode, ipynb_content)
+	if not ok_json or type(decoded) ~= "table" or decoded.nbformat == nil then
+		return false, "conversion output is not valid notebook JSON"
+	end
+
+	local tmp_path = filepath .. ".tmp"
+	local file, open_err = io.open(tmp_path, "w")
+	if not file then
+		return false, "cannot create temp file: " .. (open_err or "unknown error")
+	end
+
+	local write_ok, write_err = pcall(function()
+		file:write(ipynb_content)
+	end)
+	local close_ok, close_err = pcall(function()
+		file:close()
+	end)
+
+	if not write_ok or not close_ok then
+		os.remove(tmp_path)
+		return false, "failed to write temp file: " .. (write_err or close_err or "unknown error")
+	end
+
+	local renamed, rename_err = os.rename(tmp_path, filepath)
+	if not renamed then
+		os.remove(tmp_path)
+		return false, "failed to replace notebook file: " .. (rename_err or "unknown error")
+	end
+
+	return true, nil
 end
 
 -- Write notebook back to .ipynb format
@@ -297,18 +363,9 @@ local function write_notebook(bufnr, filepath)
 		return false
 	end
 
-	-- Write to file
-	local file, open_err = io.open(filepath, "w")
-	if not file then
-		notifications.notify_error("Failed to write file: " .. (open_err or "unknown error"))
-		return false
-	end
-
-	local write_ok, write_err = file:write(ipynb_content)
-	file:close()
-
-	if not write_ok then
-		notifications.notify_error("Failed to write content: " .. (write_err or "unknown error"))
+	local saved, save_err = write_ipynb_content(filepath, ipynb_content)
+	if not saved then
+		notifications.notify_error("Failed to save notebook: " .. (save_err or "unknown error"))
 		return false
 	end
 
@@ -316,6 +373,10 @@ local function write_notebook(bufnr, filepath)
 	notifications.notify("Notebook saved: " .. vim.fn.fnamemodify(filepath, ":t"), vim.log.levels.INFO)
 	return true
 end
+
+-- Exposed for tests (private-function convention: M._name)
+M._write_notebook = write_notebook
+M._write_ipynb_content = write_ipynb_content
 
 -- Setup notebook handling autocmds
 function M.setup_notebook_handler()
@@ -414,12 +475,22 @@ function M.configure_notebook_handler()
 end
 
 -- Reload a notebook buffer (useful after installing jupytext)
-function M.reload_notebook(bufnr)
+-- force: when true, unsaved buffer edits are discarded; otherwise a
+-- modified buffer is refused so user edits are never silently destroyed.
+function M.reload_notebook(bufnr, force)
 	bufnr = bufnr or vim.api.nvim_get_current_buf()
 	local filepath = vim.b[bufnr].pyworks_notebook_path or vim.api.nvim_buf_get_name(bufnr)
 
 	if not filepath:match("%.ipynb$") then
 		notifications.notify("Not a notebook file", vim.log.levels.WARN)
+		return false
+	end
+
+	if vim.bo[bufnr].modified and not force then
+		notifications.notify(
+			"Notebook buffer has unsaved edits; :w to keep them or :PyworksReloadNotebook! to discard",
+			vim.log.levels.WARN
+		)
 		return false
 	end
 

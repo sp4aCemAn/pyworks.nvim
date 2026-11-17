@@ -5,32 +5,39 @@ finds/creates the right Jupyter kernel per project, wires keymaps, and adds
 cell UX. The fragile bridge is completion detection — see the contract
 below before touching keymaps.lua.
 
-## Kernel acquisition (core/detector.lua)
+## Kernel acquisition (core/detector.lua) — ALL ASYNC
 
-`get_kernel_for_language(lang, filepath)` (line 252; exported line 452):
+`get_kernel_for_language(lang, filepath, callback)` (callback-based since
+v0.4.0: kernelspec probes and kernel creation never block the UI thread;
+exported at the detector tail):
 
 ```
 python + filepath?
-  ├─ no → generic path: cached "kernel_list" via get_available_kernels
-  │        (line 106: jupyter kernelspec list --json, 10s timeout)
+  ├─ no → generic path: fetch_kernelspecs (cached "kernel_list" 60s TTL;
+  │        async `jupyter kernelspec list --json`, 10s timeout)
   └─ yes → venv path:
-       find_python_in_venv (line 133; POSIX bin/python{,3}, creates venv if
-       missing) → find_matching_kernel (line 158: kernelspec argv[1] equal
-       or prefixed by the venv path) → else create_kernel_for_project
-       (line 201: name = parent_project sanitized to ^[%w_]; requires
-       ipykernel IN the venv; runs python -m ipykernel install --user)
+       find_python_in_venv (POSIX bin/python{,3}; nil => broken venv —
+       reported, NOT a phantom path) → match_kernel_in_specs (kernelspec
+       argv[1] equal or inside venv with "/" boundary — .venv2 does NOT
+       match .venv) → else create_kernel_for_project (name = parent_project
+       sanitized to ^[%w_], skipping home-dir/username components; requires
+       ipykernel IN the venv; async python -m ipykernel install --user)
 ```
 
 Kernel names are re-validated `^[%w%-_%.]+$` before ever reaching
-`vim.cmd("MoltenInit ...")` (auto_init_molten, line 321).
+`vim.cmd("MoltenInit ...")` (auto_init_molten); the deferred MoltenInit
+also re-checks the buffer (a switch during the async lookup aborts).
 
-## auto_init_molten (detector.lua:300)
+## auto_init_molten
 
 Guarded by `b:molten_init_attempted` (reset on failure so retries work);
 sets `b:molten_initialized = true` **when the MoltenInit command returns**
 — NOT when the kernel is ready (kernel boot is async; Molten fires User
-`MoltenKernelReady`). Consumers: `<leader>jl` auto-init (keymaps.lua:392),
-`cell_engine.run_cell` refuses without the flag (cell_engine.lua:216).
+`MoltenKernelReady`). The flag is CLEARED on every MoltenDeinit
+(reload/session-restore paths) — a stale flag made run-all/`<leader>jl`
+silently fail post-reload. Consumers: `<leader>jl` auto-init (async
+callback; the deferred evaluate re-checks its buffer), `cell_engine.run_cell`
+refuses without the flag.
 
 ## The ready-hook race (init.lua:144-156)
 
@@ -43,40 +50,57 @@ before running the user cell (test/env/e2e_smoke.lua) and documents the
 upstream interaction; a plugin-side fix (serialize ready-hook evals) is an
 open thread (docs/LMS.md).
 
-## Cell ops (core/cell_engine.lua)
+## Cell ops (core/cell_engine.lua + core/cell_model.lua)
 
-Boundaries via cursor-position searches (find_cell_boundaries line 29:
-`"bcnW"` backward marker + `"nW"` next), insert/split/merge/toggle = pure
-buffer edits around the configured marker (line 9-27: `get_cell_pattern` is
-the Lua-pattern form, `vim_search_pattern` the Vim-regex form — never
-hardcode `# %%`). run_cell (line 211): flag → boundaries →
+Structure comes from the canonical cell model (F1/F3): `cell_model.for_buffer`
+(core/cell_model.lua:54) builds `{index, marker_line, type, start_line,
+end_line, marker_text}` cells (preamble = implicit cell 0);
+`cell_model.markers` (:99) / `cell_at` (:114) / `is_marker_line` (:132) /
+`markdown_regions` (:148). cell_engine keeps its API as call-throughs:
+find_cell_boundaries (cell_engine.lua:39) = `cell_at(cursor).start/end`
+(nil,nil when empty), count_cells (:47), get_cell_positions (:52),
+is_markdown_cell (:73) by TYPE. insert/split/merge/toggle = pure buffer edits
+around the configured marker (lines 14-27: `get_cell_pattern` is the
+Lua-pattern form, `vim_search_pattern` the Vim-regex form — never hardcode
+`# %%`). run_cell (line 194): flag → boundaries →
 `vim.fn.MoltenEvaluateRange(s, e)` with visual-mark fallback.
 
 ## Run-all + completion polling (keymaps.lua) — THE FRAGILE PART
 
-`<leader>jR` (line 484) executes cells sequentially: navigate →
-`evaluate_percent_cell` (line 333) → `wait_for_cell_completion` (line 232)
-polls every 150ms (line 25) up to 30s (line 26), detecting completion by
-**scraping Molten's virtual text for `Out[N]: ✓ Done`**
-(`extract_completed_output_num`, line 180) — the highest completed `Out[N]`
-must strictly increase (`get_highest_completed_output`, line 192).
-Markdown cells are skipped (line 542); cursor moves run under
-`with_suppressed_events` (line 320).
+`<leader>jR` executes cells sequentially from the cell model:
+snapshot `cell_model.markers(bufnr)` → **in-progress guard** (a second
+press mid-run is refused — two loops would double-execute against the
+shared Out[N] counter) → per cell: revalidate buffer identity + the
+cell's live model position (marker line + text; aborts with a notice on
+mid-run edits/switches — each cell can wait 30s so staleness is likely),
+skip by TYPE (markdown) or empty range, else
+`MoltenEvaluateRange(cell.start_line, cell.end_line)` (the model's exact
+content range) → `wait_for_cell_completion` polls every 150ms up to 30s,
+detecting completion by **scraping Molten's virtual text for
+`Out[N]: ✓ Done`** (`extract_completed_output_num`) — the highest
+completed `Out[N]` must strictly increase (`get_highest_completed_output`).
+Pre-F3 this navigated with cursor-relative searches (`"bnW"` without `c`):
+cursor on a marker found the PREVIOUS marker, double-executing adjacent
+cells — the model ranges made that class impossible (regression tests:
+keymaps_spec "run-all via cell model", incl. the in-progress guard and
+mid-run-edit abort). Cursor moves run under `with_suppressed_events`.
 
-Namespace lookup (`get_molten_namespace`, line 105) must match
-**`"molten-extmarks"` exactly** — the block comment at lines 41-55 is law:
-`^molten` prefix matching nondeterministically hits `molten-highlights`
-and causes 30s timeouts (pre-91adb5c). Cached; invalidated on BufEnter
-(line 66-82) except while a notebook reload is in flight (recursion
-guard check).
+Namespace lookup (`get_molten_namespace`) must match
+**`"molten-extmarks"` exactly** — the block comment near the top of
+keymaps.lua is law: `^molten` prefix matching nondeterministically hits
+`molten-highlights` and causes 30s timeouts (pre-91adb5c). Cached as a
+scalar; invalidated on BufEnter except while a notebook reload is in
+flight (recursion guard check).
 
 ## UI (ui.lua)
 
-`number_cells` (line 88): virt-text `[Cell N: code|markdown]` in
-`pyworks_cell_numbers` ns, red/green by `M.executed_cells[buf][N]`
-(mark_cell_executed line 50 / cleared line 61), debounced 150ms renumber on
-TextChanged (setup_buffer line 245). Folding (lines 126-155): `foldexpr`
-`>1` at each marker. Float windows: `create_floating_window` (line 371) —
+`number_cells` (line 79): virt-text `[Cell N: code|markdown]` in
+`pyworks_cell_numbers` ns from `cell_model.markers` (F3), red/green by
+`M.executed_cells[buf][N]` (mark_cell_executed line 50 / cleared line 61),
+debounced 150ms renumber on TextChanged (setup_buffer line 225). Folding:
+`cell_fold_expr` (line 128) starts a fold at each marker via
+`cell_model.is_marker_line`, `cell_fold_text` (:138) labels folds from the
+model. Float windows: `create_floating_window` (line 351) —
 `q`/`<Esc>`/WinLeave close it.
 
 ## Molten dependency surface
@@ -96,7 +120,10 @@ everywhere.
   cell-status colors. The e2e smoke test is the tripwire — keep it honest.
 - Never `vim.g.molten_*` mutation after Molten's host initialized its
   options (cached at first `:MoltenInit`); use `MoltenUpdateOption`.
-- `b:molten_initialized` means "command accepted", not "kernel up".
+- `b:molten_initialized` means "command accepted", not "kernel up", and is
+  cleared on every MoltenDeinit.
+- `cell_model.for_buffer` results are memoized per (bufnr, changedtick):
+  treat returned cells as READ-ONLY (mutation leaks into the memo).
 
 ## Covered by
 

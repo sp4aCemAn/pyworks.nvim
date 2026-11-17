@@ -1,6 +1,7 @@
 -- Test suite for pyworks.core.packages module
 -- Tests import detection and package mapping
 
+local cache = require("pyworks.core.cache")
 local packages = require("pyworks.core.packages")
 
 describe("packages", function()
@@ -204,6 +205,33 @@ describe("packages", function()
 			assert.is_nil(packages.is_typosquat("fork"))
 		end)
 
+		it("flags prefix-squats of known packages regardless of edit distance", function()
+			-- "scikit" ties between scikit-image/scikit-learn (same length);
+			-- the lexicographic tie-break makes the winner deterministic
+			assert.are.equal("scikit-image", packages.is_typosquat("scikit"))
+			assert.are.equal("pandas", packages.is_typosquat("panda"))
+			assert.are.equal("matplotlib", packages.is_typosquat("matplot"))
+			assert.are.equal("torchvision", packages.is_typosquat("torchvisio"))
+		end)
+
+		it("does not prefix-flag known packages or short candidates", function()
+			assert.is_nil(packages.is_typosquat("jupyter")) -- known, though prefix of jupyterlab
+			assert.is_nil(packages.is_typosquat("vex")) -- ≥2 edits from any short known name (tox/jax/ray)
+			-- "fast" ties at 2 edits between dash and dask; the lexicographic
+			-- tie-break picks "dash" deterministically (precedent: "scikit").
+			assert.are.equal("dash", packages.is_typosquat("fast"))
+			assert.is_nil(packages.is_typosquat("dask")) -- known
+		end)
+
+		it("is deterministic across repeated calls (no pairs-order tie flakiness)", function()
+			local scikit_answer = packages.is_typosquat("scikit")
+			local fast_answer = packages.is_typosquat("fast")
+			for _ = 1, 20 do
+				assert.are.equal(scikit_answer, packages.is_typosquat("scikit"))
+				assert.are.equal(fast_answer, packages.is_typosquat("fast"))
+			end
+		end)
+
 		it("strips version specifiers and extras before matching", function()
 			assert.are.equal("numpy", packages.is_typosquat("numpi>=1.24"))
 			assert.is_nil(packages.is_typosquat("numpy[extra]==2.0"))
@@ -236,6 +264,112 @@ describe("packages", function()
 			assert.is_true(vim.tbl_contains(imports, "os")) -- stdlib roots unaffected
 
 			vim.fn.delete(temp_file)
+		end)
+	end)
+
+	describe("validate_package_names", function()
+		it("accepts plain PyPI names, extras, and version specifiers", function()
+			local valid = {
+				"requests",
+				"scikit-learn",
+				"some_pkg",
+				"my.pkg",
+				"l",
+				"requests[security]",
+				"numpy>=1.20",
+				"pandas==2.0.1",
+				"pkg!=1.2",
+				"pkg~=1.0",
+			}
+			local ok, invalid = packages.validate_package_names(valid)
+			assert.same(valid, ok)
+			assert.is_true(#invalid == 0)
+		end)
+
+		it("rejects pip option smuggling and malformed names", function()
+			local invalid_input = {
+				"--index-url",
+				"-y",
+				"--",
+				"",
+				"requests; rm -rf /",
+				"a b",
+				"pandas==",
+				"requests[",
+				"pkg,other",
+			}
+			local _, invalid = packages.validate_package_names(invalid_input)
+			assert.equals(#invalid_input, #invalid, "every malformed entry must be rejected")
+		end)
+	end)
+
+	describe("installed-packages cache keying and invalidation", function()
+		after_each(function()
+			package.loaded["pyworks.languages.python"] = nil
+		end)
+
+		it("keys the cache per project root, so files in one project share an entry", function()
+			local root = vim.fn.tempname()
+			vim.fn.mkdir(root, "p")
+			vim.fn.mkdir(root .. "/sub", "p")
+			vim.fn.writefile({}, root .. "/pyproject.toml")
+			local f1 = root .. "/a.py"
+			local f2 = root .. "/sub/b.py"
+			vim.fn.writefile({}, f1)
+			vim.fn.writefile({}, f2)
+
+			local calls = 0
+			package.loaded["pyworks.languages.python"] = {
+				get_installed_packages = function(_, cb)
+					calls = calls + 1
+					cb({ "requests" })
+				end,
+			}
+
+			local first, second
+			packages.get_installed_packages("python", f1, function(r)
+				first = r
+			end)
+			packages.get_installed_packages("python", f2, function(r)
+				second = r
+			end)
+
+			assert.same(first, second)
+			assert.equals(1, calls, "second file in the same project must be served from cache")
+
+			vim.fn.delete(root, "rf")
+		end)
+
+		it("invalidate_pattern('^installed_packages_') clears every per-project entry", function()
+			local root = vim.fn.tempname()
+			vim.fn.mkdir(root, "p")
+			vim.fn.writefile({}, root .. "/pyproject.toml")
+			local f = root .. "/a.py"
+			vim.fn.writefile({}, f)
+
+			local calls = 0
+			package.loaded["pyworks.languages.python"] = {
+				get_installed_packages = function(_, cb)
+					calls = calls + 1
+					cb({ "requests" })
+				end,
+			}
+
+			local results = 0
+			packages.get_installed_packages("python", f, function()
+				results = results + 1
+			end)
+			assert.equals(1, calls)
+
+			cache.invalidate_pattern("^installed_packages_")
+
+			packages.get_installed_packages("python", f, function()
+				results = results + 1
+			end)
+			assert.equals(2, calls, "entry must be re-fetched after pattern invalidation")
+			assert.equals(2, results, "callback must fire on every call")
+
+			vim.fn.delete(root, "rf")
 		end)
 	end)
 end)

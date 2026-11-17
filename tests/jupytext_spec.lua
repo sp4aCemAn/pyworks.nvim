@@ -111,6 +111,205 @@ describe("jupytext", function()
 
 			vim.api.nvim_buf_delete(bufnr, { force = true })
 		end)
+
+		it("refuses a modified buffer without force and leaves its content untouched", function()
+			local bufnr = vim.api.nvim_create_buf(false, true)
+			vim.api.nvim_buf_set_name(bufnr, "/tmp/some_notebook.ipynb")
+			vim.bo[bufnr].buftype = "" -- nofile buffers don't track 'modified'
+			vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "unsaved edit sentinel" })
+			vim.bo[bufnr].modified = true
+
+			local result = jupytext.reload_notebook(bufnr)
+			assert.is_false(result)
+			assert.equals("unsaved edit sentinel", vim.api.nvim_buf_get_lines(bufnr, 0, 1, false)[1])
+			assert.is_true(vim.bo[bufnr].modified)
+
+			vim.api.nvim_buf_delete(bufnr, { force = true })
+		end)
+
+		it("force=true discards unsaved edits and converts a real .ipynb", function()
+			if jupytext.find_jupytext_cli() == nil then
+				return
+			end
+
+			local dir = vim.fn.tempname()
+			vim.fn.mkdir(dir, "p")
+			local nb_path = dir .. "/nb.ipynb"
+			vim.fn.writefile({
+				'{"cells": [{"cell_type": "code", "source": ["print(1)"], "metadata": {}, "outputs": [], "execution_count": null}], "metadata": {}, "nbformat": 4, "nbformat_minor": 5}',
+			}, nb_path)
+
+			local bufnr = vim.api.nvim_create_buf(false, true)
+			vim.api.nvim_buf_set_name(bufnr, nb_path)
+			vim.bo[bufnr].buftype = "" -- nofile buffers don't track 'modified'
+			vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "unsaved edit sentinel" })
+			vim.bo[bufnr].modified = true
+
+			local result = jupytext.reload_notebook(bufnr, true)
+			assert.is_true(result)
+			local first = vim.api.nvim_buf_get_lines(bufnr, 0, 1, false)[1]
+			assert.is_false(first:match("^%s*{") ~= nil, "buffer should be percent-format, not JSON")
+			assert.is_false(vim.bo[bufnr].modified)
+
+			vim.api.nvim_buf_delete(bufnr, { force = true })
+			vim.fn.delete(dir, "rf")
+		end)
+	end)
+end)
+
+describe("jupytext atomic save (write_ipynb_content)", function()
+	local tmp_base
+	local valid_ipynb
+
+	before_each(function()
+		tmp_base = vim.fn.tempname()
+		vim.fn.mkdir(tmp_base, "p")
+		valid_ipynb = '{"cells": [], "metadata": {}, "nbformat": 4, "nbformat_minor": 5}'
+	end)
+
+	after_each(function()
+		vim.fn.delete(tmp_base, "rf")
+	end)
+
+	it("writes valid notebook JSON to the target and leaves no temp file", function()
+		local target = tmp_base .. "/nb.ipynb"
+		local ok, err = jupytext._write_ipynb_content(target, valid_ipynb)
+		assert.is_true(ok)
+		assert.is_nil(err)
+		assert.equals(1, vim.fn.filereadable(target))
+		local decoded = vim.fn.json_decode(vim.fn.readfile(target))
+		assert.equals(4, decoded.nbformat)
+		assert.equals(0, vim.fn.filereadable(target .. ".tmp"))
+	end)
+
+	it("refuses content that is not JSON and leaves the original untouched", function()
+		local target = tmp_base .. "/nb.ipynb"
+		local original = "original sentinel"
+		vim.fn.writefile({ original }, target)
+
+		local ok, err = jupytext._write_ipynb_content(target, "not json at all {{{")
+		assert.is_false(ok)
+		assert.is_string(err)
+		assert.equals(original, table.concat(vim.fn.readfile(target), "\n"))
+		assert.equals(0, vim.fn.filereadable(target .. ".tmp"))
+	end)
+
+	it("refuses JSON that is not a notebook (no nbformat key)", function()
+		local target = tmp_base .. "/nb.ipynb"
+		local original = "original sentinel"
+		vim.fn.writefile({ original }, target)
+
+		local ok, err = jupytext._write_ipynb_content(target, '{"not": "a notebook"}')
+		assert.is_false(ok)
+		assert.matches("notebook JSON", err)
+		assert.equals(original, table.concat(vim.fn.readfile(target), "\n"))
+		assert.equals(0, vim.fn.filereadable(target .. ".tmp"))
+	end)
+
+	it("refuses empty and non-string content without touching anything", function()
+		local target = tmp_base .. "/nb.ipynb"
+		assert.is_false(jupytext._write_ipynb_content(target, ""))
+		assert.is_false(jupytext._write_ipynb_content(target, nil))
+		assert.equals(0, vim.fn.filereadable(target))
+		assert.equals(0, vim.fn.filereadable(target .. ".tmp"))
+	end)
+
+	it("fails cleanly when the temp file cannot be created", function()
+		local ok, err = jupytext._write_ipynb_content("/nonexistent_dir_no_chance/nb.ipynb", valid_ipynb)
+		assert.is_false(ok)
+		assert.matches("temp file", err)
+	end)
+end)
+
+describe("jupytext atomic save (write_notebook end-to-end)", function()
+	it("converts a percent buffer and lands valid nbformat JSON with no temp leftovers", function()
+		if jupytext.find_jupytext_cli() == nil then
+			return
+		end
+
+		local dir = vim.fn.tempname()
+		vim.fn.mkdir(dir, "p")
+		local target = dir .. "/nb.ipynb"
+
+		local bufnr = vim.api.nvim_create_buf(false, true)
+		vim.api.nvim_buf_set_name(bufnr, target)
+		vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {
+			"# %% [markdown]",
+			"# # Title",
+			"#",
+			"# body",
+			"",
+			"# %%",
+			"print(1)",
+		})
+
+		local ok = jupytext._write_notebook(bufnr, target)
+		assert.is_true(ok)
+		local decoded = vim.fn.json_decode(vim.fn.readfile(target))
+		assert.equals(4, decoded.nbformat)
+		assert.equals(0, vim.fn.filereadable(target .. ".tmp"))
+
+		vim.api.nvim_buf_delete(bufnr, { force = true })
+		vim.fn.delete(dir, "rf")
+	end)
+end)
+
+describe("_build_install_command (uv-aware)", function()
+	local tmp_base
+	local orig_path
+
+	before_each(function()
+		tmp_base = vim.fn.tempname()
+		vim.fn.mkdir(tmp_base .. "/bin", "p")
+		orig_path = vim.env.PATH
+	end)
+
+	after_each(function()
+		vim.env.PATH = orig_path
+		vim.fn.delete(tmp_base, "rf")
+	end)
+
+	local function fake_executable(name)
+		local path = tmp_base .. "/bin/" .. name
+		vim.fn.writefile({ "#!/bin/sh" }, path)
+		vim.fn.setfperm(path, "rwxr-xr-x")
+		vim.env.PATH = tmp_base .. "/bin:" .. (vim.env.PATH or "")
+	end
+
+	it("uses venv/bin/pip when pip exists in the venv", function()
+		local venv = tmp_base .. "/.venv"
+		vim.fn.mkdir(venv .. "/bin", "p")
+		vim.fn.writefile({ "#!/bin/sh" }, venv .. "/bin/pip")
+		vim.fn.setfperm(venv .. "/bin/pip", "rwxr-xr-x")
+		local cmd = jupytext._build_install_command(venv .. "/bin/python", venv)
+		assert.same({ venv .. "/bin/pip", "install", "jupytext" }, cmd)
+	end)
+
+	it("routes uv venvs (no pip) through `uv pip --python`", function()
+		fake_executable("uv")
+		local venv = tmp_base .. "/.venv"
+		local cmd = jupytext._build_install_command(venv .. "/bin/python", venv)
+		assert.same({ "uv", "pip", "install", "--python", venv .. "/bin/python", "jupytext" }, cmd)
+	end)
+
+	it("falls back to -m pip outside a venv", function()
+		local cmd = jupytext._build_install_command("/usr/bin/python3", nil)
+		assert.same({ "/usr/bin/python3", "-m", "pip", "install", "jupytext" }, cmd)
+	end)
+
+	it("falls back to -m pip when the venv has neither pip nor uv", function()
+		-- Strip uv from PATH (the container ships it)
+		vim.env.PATH = tmp_base .. "/bin"
+		local venv = tmp_base .. "/.venv"
+		local cmd = jupytext._build_install_command(venv .. "/bin/python", venv)
+		assert.same({ venv .. "/bin/python", "-m", "pip", "install", "jupytext" }, cmd)
+	end)
+
+	it("treats an unrelated python as out-of-venv", function()
+		fake_executable("pip")
+		local venv = tmp_base .. "/.venv"
+		local cmd = jupytext._build_install_command("/usr/bin/python3", venv)
+		assert.same({ "/usr/bin/python3", "-m", "pip", "install", "jupytext" }, cmd)
 	end)
 end)
 

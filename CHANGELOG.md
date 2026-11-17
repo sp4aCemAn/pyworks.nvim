@@ -2,16 +2,64 @@
 
 All notable changes to pyworks.nvim will be documented in this file.
 
-## [Unreleased]
+## [0.4.0] - 2026-11-16
+
+Full code-review remediation release: data-integrity fixes (atomic notebook
+saves, reload safety), run-all hardening, the async conversion of every
+environment probe (no more multi-second UI freezes on file open), cache
+correctness, security wiring for package names, and a broad hygiene sweep.
+Every slice landed with its own regression tests; the containerized e2e
+smoke stayed at its known-upstream baseline throughout.
 
 ### Added
 
+- **`packages.sync_scope` config option** (`"project"` default, or
+  `"global"`): missing-package detection for `<leader>pi`/`:PyworksSync`
+  is tracked per project (Colab-like: each project sees and installs its
+  own detected missing packages) instead of one shared list. Invalid
+  values warn without crashing.
+- **Notebook LSP diagnostics silencing** (`notebooks.lsp`, default
+  `"silence"`): jupytext percent scripts store markdown cell bodies as raw
+  text, so Python servers (pylsp, pyright) reported syntax errors on those
+  lines and cascading bogus scope warnings across code cells. `pyworks` now
+  wraps `textDocument/publishDiagnostics` and drops diagnostics pointing
+  inside `# %% [markdown]` regions of notebook buffers only. Modes:
+  `"silence"` (filter, keep completion), `"detach"` (detach every LSP client
+  from notebook buffers via an `LspAttach` autocmd), `"attach"` (status quo).
+  Non-notebook buffers and payloads outside
+  markdown regions are forwarded untouched. Neovim clients snapshot the
+  global handler table at start time, so silence also wraps the handlers of
+  clients that were already running when pyworks lazy-loads (via
+  `LspAttach` + an install-time sweep of `vim.lsp.get_clients()`).
+- **`notebooks` config section**: `notebooks.lsp` (above) and
+  `notebooks.md_formatter` (argv array, default pandoc, used to format
+  markdown cell content). Invalid values warn without crashing.
+  Lists use replace semantics on merge (no `tbl_deep_extend` index-merge
+   tail leak).
+- **Inline markdown concealment** (`notebooks.md_conceal`, default true):
+  notebook buffers now hide the jupytext `# ` comment prefix on markdown
+  cell content lines via window-local `matchadd` ranges recomputed from the
+  canonical cell model (debounced), so md cells read as plain markdown while
+  the buffer stays a valid percent script; the line under the cursor always
+  shows the real prefix (`concealcursor=nvi`), and `md_conceal = false`
+  restores raw editing. New `notebooks.md_fold_default` (default false)
+  opens notebooks with markdown cells folded and code cells expanded.
+  Built on a throwaway spike verified against a real `ext_linegrid` render
+  (findings incl. the `^`-must-lead-each-`\|`-branch regex trap:
+  docs/UX_MODEL_A_REFACTOR.md). Model A refactor F6.
+- **`:PyworksFormatMarkdownCell` / `<leader>jfm`**: runs the configured
+  `notebooks.md_formatter` (argv, default `pandoc -f gfm -t markdown`) over
+  the markdown cell under the cursor and replaces its content with the
+  formatter's output — async, buffer untouched on failure, helpful hint
+  when the formatter binary is missing. Marker lines are never passed to
+  (or rewritten by) the formatter.
 - **Typosquat guard for package installs** (security): auto-detected import
   names — derived from (potentially untrusted) file content — are now checked
   against a curated set of known packages using PEP 503 normalization plus
   bounded Levenshtein distance (`packages.is_typosquat`,
   `packages.filter_typosquats`). Near-miss names (`reqeusts`, `numpi`,
-  `tdqm`, …) are **blocked** from every programmatic install path
+  `tdqm`) and prefix squats (`scikit`, `panda`, `matplot` — flagged at any
+  edit distance by the prefix rule) are **blocked** from every programmatic install path
   (`<leader>pi`, `:PyworksSync`) with a notification naming the closest known
   package; the manually typed `:PyworksAdd` warns but proceeds (explicit user
   intent is the escape hatch). The curated list is security-critical — see
@@ -58,8 +106,216 @@ All notable changes to pyworks.nvim will be documented in this file.
   and `test/ENVIRONMENT_PLAN.md`: run `warm` before `unit`/`scenarios`/`e2e`
   on a cold sandbox — test runs have no network egress by design.
 
+### Removed
+
+- **`error_handler.wrap`** (dead code: zero callers): use `protected_call`
+  directly. Also removed the dead "project-only" gating in the plugin
+  loader — `find_project_root()` always resolves (fallback: file dir /
+  cwd), so every Python file is a project by doctrine and the old gates
+  never fired.
+- **`notebooks.markdown_highlight` + `notebook/markdown_hl.lua`** (added
+  earlier in this same unreleased cycle, never in a release): the
+  `pyworksMdCell` syntax region can never render on real notebook buffers —
+  canonical jupytext percent comments markdown cell content, and
+  `pythonComment` (`syn match "#.*$"`) wins the same-position highlight
+  tie against any later-defined region, so the feature was dead code that
+  only appeared to work in specs (their buffers lack `filetype=python`).
+  Markdown presentation moves to Model A inline concealment (F6);
+  markview.nvim remains the richer treesitter-based option for styled
+  markdown. Users setting the option can delete the line — unknown
+  `notebooks.*` keys are ignored.
+
+### Changed
+
+- **`<leader>jm` is the markdown-format keymap** (was `<leader>jfm`): it
+  shadowed `<leader>jf` (fold toggle), stalling every fold toggle for
+  `timeoutlen`. `<leader>jfm` still works as an alias. `<leader>pi` is now
+  a single map (the buffer-local duplicate with divergent behavior is
+  gone) routed through the ft-gated `:PyworksSync`.
+- **Run-all cursor parking no longer edits the buffer**: parking the
+  cursor after the last cell appended an empty line to the notebook;
+  navigation now lands on the marker instead (`enter_cell` gained an
+  `append = false` mode — the interactive `enter_first_cell` path keeps
+  the old behavior).
+- **`molten_initialized` is cleared on every Molten deinit**: after a
+  notebook reload or session restore, the stale buffer flag made run-all
+  and `<leader>jl` silently fail until the user re-initialized.
+- **User commands register in `setup()`**: the eight "manual" commands
+  (`:PyworksSetup`…`:PyworksHelp`) and `:PyworksDebugExtmarks` used to be
+  registered as side effects of module loading.
+
 ### Fixed
 
+- **`PyworksFormatMarkdownCell` stale-region race**: the formatter's
+  (up to 30s async) output was written to line numbers captured before
+  dispatch; any mid-flight edit landed output in the wrong place. The
+  callback now re-resolves the cell via the model (marker identity) and
+  bails with a notice if the layout moved. Multi-line range invocation
+  gets a friendly message instead of a bare Vim error.
+- **Notebook LSP silencing**: `uninstall()` now unwraps per-client handler
+  tables (previously they kept filtering until restart), the filtered
+  payload forwards all result fields (LSP 3.15+ `version`), and two
+  clients sharing one handler function are both wrapped.
+- **Notification dedup no longer poisoned by undisplayed messages**: the
+  dedup history only records messages that are actually shown; under
+  `silent_when_ready` a suppressed message no longer masks a real
+  duplicate 10s later.
+- **Kernel names are home-directory aware**: kernels created for projects
+  under the user's home no longer embed the username
+  (`james_myproj`-style names leaked across machines).
+- **Import extraction ignores comments**: comment text inside
+  parenthesized multiline imports ("use the fast one") was extracted as
+  import names — and "comment" is a real PyPI package, making it a live
+  (benign) supply-chain suggestion.
+- **image.nvim auto-setup defers to user lazy configs**: if the user's
+  lazy spec provides `config`/`opts` for image.nvim, pyworks no longer
+  pre-empts it with its own setup 100ms after startup.
+- **Misc**: environment-ready notification only fires when the essentials
+  probe finds nothing missing; package-install error buffers get unique
+  names (second failure no longer raises E95); "pip missing ⇒ uv"
+  classification requires uv to actually be available; jupytext PATH
+  dedup uses exact entry match (prefix dirs no longer skip prepending);
+  state convenience helpers honor the persistence save contract;
+  `show_error_details` guards its split against window limits;
+  `validate_filepath` accepts directories.
+
+- **Cell operations no longer lose marker titles, misclassify titles
+  containing `[markdown]`, or error on nomodifiable buffers**:
+  `toggle_cell_type` preserves the text after the marker (`# %% my title`
+  → `# %% [markdown] my title` and back), the cell model anchors the type
+  tag to the marker itself (a code-cell title containing the literal
+  `[markdown]` no longer gets silently skipped by run-all), all mutating
+  cell ops warn instead of erroring on nomodifiable buffers, a blank-only
+  cell counts as empty (running it evaluated whitespace), unloaded
+  buffers no longer produce a phantom preamble cell, and custom markers
+  containing regex specials now search literally (`vim_search_pattern`
+  escapes vim's unescaped-special set).
+- **Failed command diagnostics now show stderr**: `system_with_timeout`
+  discarded stderr, so failure messages (venv creation, kernel creation,
+  jupytext conversion) showed an empty string while the actual diagnosis
+  was on stderr. On failure the stderr is now surfaced when stdout is
+  empty.
+- **Every subprocess has a time bound**: the last unbounded
+  `:wait()` calls — the pynvim registration probe, `:checkhealth`'s Python
+  host check, `:PyworksDiagnostics`' python/uv probes, the jupytext
+  import check, and both jupytext conversions (notebook open AND save) —
+  now run with explicit timeouts (10-30s), so a hung interpreter or
+  jupytext process can no longer freeze the editor indefinitely.
+- **Environment probes no longer block the editor** (continued): the
+  installed-package detection chain (`pip list`/`uv pip list`, the
+  essentials import probes, and missing-package analysis) is now
+  callback-based and runs entirely off the UI thread — previously opening
+  a file could freeze it for 5-20s on fresh projects (4 × 5s import
+  probes + a 15s pip list). The unobserved fire-and-forget `pip install
+  --upgrade pip` that raced the essentials install on the same venv was
+  removed. `is_package_installed` stays synchronous for `:checkhealth`
+  only.
+- **Environment probes no longer block the editor** (kernels): the
+  kernelspec list/match and kernel-creation path is callback-based
+  (`get_kernel_for_language(language, filepath, callback)`); opening a
+  file in a fresh project no longer freezes the UI for up to ~2 minutes
+  (kernel list + ipykernel probe + creation), and `<leader>jl` resolves
+  the kernel asynchronously. A broken venv (directory without an
+  interpreter) now reports and stops instead of inventing a Python path.
+- **Notebook cell model is memoized per `(buffer, changedtick)`**: every
+  `cell_at` call re-scanned the whole buffer, so a fold-expression pass on
+  a large notebook with `notebooks.md_fold_default` cost O(markers ×
+  lines) — ~0.8 s per fold recompute at 1600 markers (and the LSP
+  diagnostic silencer paid a full scan per publish message). Structure is
+  now computed once per buffer edit; benchmarked 818 ms → 30 ms per fold
+  pass at 6401 lines (the residual is per-line marker checks, not model
+  scans).
+- **Markdown concealment no longer leaks into non-notebook buffers**:
+  window-local `matchadd` matches and the `conceallevel=2`/`concealcursor`
+  overrides survived a buffer switch in the same window, so a stale
+  line-range pattern could conceal unrelated buffers. Entering a
+  non-notebook buffer in a window that had notebook chrome now deletes the
+  match and restores the user's own conceal options (saved at entry).
+  `md_fold_default` also no longer re-sets `foldlevel` on every debounced
+  refresh — manually opened folds survive typing.
+- **jupytext installation works on uv-created venvs**: the installer
+  previously ran `venv/bin/pip install jupytext`, which does not exist in
+  a uv venv (and the `python -m pip` fallback has no pip module either) —
+  the install always failed with a generic error. The command is now
+  chosen by what is actually present: venv `bin/pip` → `uv pip
+  --python <interpreter>` → `-m pip`. The "ipykernel not found" hint in
+  kernel creation was likewise pip-only and now suggests the right
+  package-manager command.
+- **Typosquat reporting is now deterministic**: when a suspicious name is
+  equidistant from two known packages (`scikit` → `scikit-image`/`scikit-learn`,
+  `fast` → `dash`/`dask`), the reported "closest" package was chosen by
+  Lua hash-iteration order, so the same input could report a different
+  neighbor across runs. Equal-distance ties now resolve lexicographically
+  in both the prefix-squat and edit-distance rules.
+- **Package-name validation is now on every exec path** (security):
+  `validate_package_names` existed but was only reachable through a
+  `packages.install_packages` wrapper that had zero callers, so live paths
+  (`:PyworksSync`, `:PyworksAdd`, `:PyworksRemove`, essentials) passed
+  names straight to pip. The validator is now called first in
+  `python.install_packages` (before any venv work) and in the uninstall
+  path, rejecting malformed names outright — including pip **option
+  smuggling** like `--index-url` (all exec is array-form `vim.system`, so
+  shell injection was never possible, but pip would parse a leading `-` as
+  an option). The validator's charset also tightened: unbalanced extras
+  brackets rejected, specifiers require a version, no stray commas.
+  (Found while hardening: LuaJIT's pattern engine does not support `?`
+  applied to a capture group — `^a(b)?$` never matches; the validator now
+  uses four anchored patterns instead of one optional group.)
+- **Stale "missing packages" state after every install/uninstall**: the
+  post-install callbacks invalidated the literal cache key
+  `installed_packages_python`, which never existed — real keys are
+  `installed_packages_<language>_<path>`, so the installed list stayed
+  stale for its full 5-minute TTL and `:PyworksSync`/`<leader>pi` kept
+  nagging about already-installed packages. Invalidation now uses a
+  `^installed_packages_` pattern, and the cache is keyed per project root
+  (one entry per venv) instead of per file.
+- **Run-all (`<leader>jR`) hardening**: a second press while a run is in
+  progress is refused instead of starting an interleaved sequence that
+  double-executed cells against the shared Out[N] completion counter, and
+  each iteration revalidates the buffer and the cell's live position in the
+  cell model before dispatching — mid-run edits or buffer switches (up to
+  30s per cell of exposure) abort the run with a notice instead of
+  executing stale line ranges. Markdown/empty cells are no longer marked
+  green ("executed") before the skip check.
+- **Failed notebook saves can no longer corrupt the on-disk `.ipynb`**:
+  `:w` on a notebook buffer previously truncated the target file at open
+  and wrote jupytext's output directly — a failed/truncated conversion or a
+  disk-full mid-write destroyed the notebook with no backup. Saves are now
+  atomic: the conversion output is validated as real nbformat JSON *before*
+  the target is touched, written to a temp file in the same directory, and
+  renamed over the target; any failure leaves the original file untouched.
+- **`reload_notebook` / `:PyworksReloadNotebook` no longer silently discard
+  unsaved edits**: a modified notebook buffer is refused with an actionable
+  warning (save, or `:PyworksReloadNotebook!` to discard deliberately —
+  the command now supports `!`). The JSON-fallback view (jupytext missing)
+  and error view now tell the user how to retry conversion
+  (`:PyworksReloadNotebook`) instead of leaving them in a locked buffer
+  with an install-only hint.
+- **Markdown cell formatter mangled canonical notebooks (`:PyworksFormatMarkdownCell` /
+  `<leader>jfm`)**: jupytext percent stores markdown cell content commented
+  (`# text`), but the formatter previously received the buffer lines verbatim
+  — pandoc read every `# text` as an H1 heading and the rewritten lines
+  landed back in the buffer without their comment prefix ("h1 soup", raw
+  Python syntax errors). The content is now uncommented before piping to
+  `notebooks.md_formatter` and re-commented before replacement
+  (`notebook/percent_md.lua`), and regions/types come from the canonical cell
+  model (Model A refactor F4).
+- **Run-all (`<leader>jR`) double-executed adjacent cells**: the old
+  implementation navigated with cursor-relative marker searches
+  (`search(pattern, "bnW")`, missing the `c` flag) — with the cursor ON a
+  marker line the search returned the PREVIOUS marker, shifting every
+  executed range by one cell and checking the wrong cell for the
+  `[markdown]` skip. Run-all now derives its cell list and ranges from the
+  canonical cell model (`core/cell_model.lua`): each code cell executes
+  exactly once, markdown cells are skipped by type, and numbering, folds,
+  and boundary queries call through the same model (Model A refactor F3).
+- **Silence mode leaked diagnostics on Neovim >= 0.12** (real-world repro
+  with pylsp): for `publishDiagnostics`, newer core passes `ctx.bufnr =
+  nil` and lets the handler resolve the buffer from the payload URI. The
+  wrapper's notebook check silently returned "not a notebook" and
+  forwarded everything — pyflakes' whole-file `invalid syntax` on a raw
+  markdown line stayed visible. Buffer is now resolved `ctx.bufnr` first,
+  then `vim.uri_to_bufnr(result.uri)`.
 - **Stale command name in install-error report**: referenced
   `:PyworksListPython` (does not exist); now `:PyworksList`.
 - **`recursion_guard` could permanently stall Molten's update loop**:

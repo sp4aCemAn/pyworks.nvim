@@ -52,17 +52,20 @@ line 19, cached 1h) then delegates to `handle_python_notebook`
   manage.py→Django, app.py→(grep Flask/streamlit), main.py→(grep fastapi),
   dvc.yaml, mlflow.yaml, pyproject.toml, setup.py, requirements.txt,
   environment.yml/conda.yaml.
-- **Known bug:** `find_project_root` never returns nil, so
-  `is_pyworks_project` (plugin/pyworks.lua:19) is always true and the
-  "project-only" gates are dead code. Tracked in AGENTS.md known-bugs #2.
+- **Doctrine (v0.4.0):** `find_project_root` always resolves (fallback:
+  cwd if the dir is under cwd, else the dir itself) — every Python file
+  IS a project (zero-config). The old "project-only" gates in the plugin
+  loader were dead code and were removed.
 
 ## Invariants
 
 - The `processing_<path>` flag must always be cleared (finally pattern,
   detector.lua:41) or that path is blackholed for the session.
-- Detection must never block the UI unboundedly: all probes
-  (`jupyter kernelspec list`, pip) go through `utils.system_with_timeout`
-  (utils.lua:299). Sync-on-UI-thread occurrences are known bug #4.
+- Detection must never block the UI: all probes are async
+  (`utils.async_system_call`) since v0.4.0 — kernel listing/matching and
+  kernel creation are callback-based; user-invoked diagnostics
+  (`:PyworksDiagnostics`/`:checkhealth`) may still block briefly but are
+  bounded by explicit timeouts.
 - The FileType handler is once-per-buffer; anything re-run per enter goes in
   BufWinEnter handlers with the recursion guard (notebooks.md).
 

@@ -32,8 +32,8 @@ setup(opts)                                init.lua:199
 `configure_dependencies` (init.lua:122) does three things:
 - sets ~12 `vim.g.molten_*` globals (only if `:MoltenInit` exists)
 - registers a `MoltenKernelReady` autocmd that runs a pandas width snippet
-  via `MoltenEvaluateArgument` +500ms (init.lua:144-156) — **races user
-  evaluations**; see execution.md §ready-hook
+  via `MoltenEvaluateArgument` +500ms — **races user evaluations**; see
+  execution.md §ready-hook (own augroup, re-invocation-safe)
 - calls `jupytext.configure_notebook_handler()` (init.lua via
   `notebook/jupytext.lua:390`) — installs `BufReadCmd`/`BufWriteCmd` for
   .ipynb — and optionally `image.setup()`.
@@ -48,12 +48,12 @@ works around this by calling `require("pyworks").configure_dependencies({})`
 synchronously first (test/env/run_scenarios.lua) — that call is idempotent
 (re-registers its own autocmds each time).
 
-## Commands registered at module-load (wart)
+## Commands register inside setup() (fixed v0.4.0)
 
-`PyworksSetup/Sync/Status/Add/Remove/List/Diagnostics/Help` live at
-init.lua top level (init.lua:322+), so they exist whenever init.lua is
-*required*, whether or not setup() ran. Everything else registers inside
-setup() or plugin/pyworks.lua. `tests/integration_spec.lua` asserts the full
+All user commands (`PyworksSetup/Sync/Status/Add/Remove/List/Diagnostics/
+Help`, the cell-op commands, `PyworksDebugExtmarks`, create/format
+commands) register inside `setup()` — requiring the modules no longer has
+registration side effects. `tests/integration_spec.lua` asserts the full
 expected command list — update it with any command addition.
 
 ## Invariants

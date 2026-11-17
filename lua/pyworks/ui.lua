@@ -18,12 +18,12 @@ function M.setup_cell_highlights()
 
 	if is_light then
 		-- Kanagawa light mode colors: darker colors for visibility on light background
-		vim.api.nvim_set_hl(0, "PyworksCellNumberUnrun", { fg = "#C64343", bold = true }) -- Dark red
-		vim.api.nvim_set_hl(0, "PyworksCellNumberExecuted", { fg = "#76946A", bold = true }) -- Dark green
+		vim.api.nvim_set_hl(0, "PyworksCellNumberUnrun", { fg = "#2222DD", bold = true })
+		vim.api.nvim_set_hl(0, "PyworksCellNumberExecuted", { fg = "#121704", bold = true })
 	else
 		-- Kanagawa dark mode colors: lighter colors for visibility on dark background
-		vim.api.nvim_set_hl(0, "PyworksCellNumberUnrun", { fg = "#E82424", bold = true }) -- Bright red (samuraiRed)
-		vim.api.nvim_set_hl(0, "PyworksCellNumberExecuted", { fg = "#98BB6C", bold = true }) -- Bright green (springGreen)
+		vim.api.nvim_set_hl(0, "PyworksCellNumberUnrun", { fg = "#2222DD", bold = true })
+		vim.api.nvim_set_hl(0, "PyworksCellNumberExecuted", { fg = "#00AA00", bold = true })
 	end
 end
 
@@ -38,6 +38,7 @@ local cell_numbers_ns = nil
 local cleanup_augroup = vim.api.nvim_create_augroup("PyworksExecutedCellsCleanup", { clear = true })
 vim.api.nvim_create_autocmd("BufDelete", {
 	group = cleanup_augroup,
+	desc = "Pyworks: clean executed-cell state and numbering augroup on buffer delete",
 	callback = function(ev)
 		M.executed_cells[ev.buf] = nil
 		-- Clean up buffer-specific augroup to prevent orphaned augroups
@@ -67,27 +68,17 @@ function M.mark_cell_cleared(cell_num)
 	M.number_cells()
 end
 
--- Get current cell number (for marking as executed)
+-- Get current cell number (for marking as executed); 0 in the preamble or
+-- a markerless buffer. Call-through to the canonical cell model (F3).
 function M.get_current_cell_number()
-	local cursor_pos = vim.api.nvim_win_get_cursor(0)
-	local current_line = cursor_pos[1]
-
-	-- Count cells up to cursor position
-	local lines = vim.api.nvim_buf_get_lines(0, 0, current_line, false)
-	local pattern = get_cell_pattern()
-	local cell_num = 0
-	for _, line in ipairs(lines) do
-		if line:match(pattern) then
-			cell_num = cell_num + 1
-		end
-	end
-	return cell_num
+	local cell = require("pyworks.core.cell_model").cell_at(0)
+	return cell and cell.index or 0
 end
 
--- Add virtual text numbering to cells with execution status
+-- Add virtual text numbering to cells with execution status. Positions and
+-- types come from the canonical cell model (F3).
 function M.number_cells()
 	local bufnr = vim.api.nvim_get_current_buf()
-	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 
 	-- Get or create namespace (cached for performance)
 	if not cell_numbers_ns then
@@ -100,25 +91,17 @@ function M.number_cells()
 	-- Get executed cells for this buffer
 	local executed = M.executed_cells[bufnr] or {}
 
-	-- Find and number all cells
-	local pattern = get_cell_pattern()
-	local cell_num = 1
-	for i, line in ipairs(lines) do
-		if line:match(pattern) then
-			local is_markdown = line:match("%[markdown%]")
-			local cell_type = is_markdown and "markdown" or "code"
+	for _, cell in ipairs(require("pyworks.core.cell_model").markers(bufnr)) do
+		local cell_type = cell.type == "markdown" and "markdown" or "code"
 
-			-- Use green if executed, red if not
-			local hl_group = executed[cell_num] and "PyworksCellNumberExecuted" or "PyworksCellNumberUnrun"
-			local virt_text = { { string.format(" [Cell %d: %s]", cell_num, cell_type), hl_group } }
+		-- Use green if executed, red if not
+		local hl_group = executed[cell.index] and "PyworksCellNumberExecuted" or "PyworksCellNumberUnrun"
+		local virt_text = { { string.format(" [Cell %d: %s]", cell.index, cell_type), hl_group } }
 
-			vim.api.nvim_buf_set_extmark(bufnr, cell_numbers_ns, i - 1, 0, {
-				virt_text = virt_text,
-				virt_text_pos = "eol",
-			})
-
-			cell_num = cell_num + 1
-		end
+		vim.api.nvim_buf_set_extmark(bufnr, cell_numbers_ns, cell.marker_line - 1, 0, {
+			virt_text = virt_text,
+			virt_text_pos = "eol",
+		})
 	end
 end
 
@@ -141,12 +124,23 @@ function M.setup_cell_folding()
 	vim.wo.foldtext = "v:lua.require('pyworks.ui').cell_fold_text()"
 end
 
--- Fold expression for cells
+-- Fold expression for cells (marker lines open a fold; content continues
+-- it). Marker check call-throughs the cell model (F3). When
+-- notebooks.md_fold_default is on, markdown markers get fold level 2 while
+-- code markers stay at 1, so foldlevel=1 collapses only markdown cells
+-- (Model A F6). Default off -> unchanged ">1" at every marker.
 function M.cell_fold_expr()
-	local line = vim.fn.getline(vim.v.lnum)
-
-	-- Start a new fold at each cell marker
-	if line:match(get_cell_pattern()) then
+	local cell_model = require("pyworks.core.cell_model")
+	if cell_model.is_marker_line(0, vim.v.lnum) then
+		-- Lazy require (same cycle-break as get_cell_pattern above)
+		local ok, pyworks = pcall(require, "pyworks")
+		local cfg = ok and pyworks.get_config and pyworks.get_config() or nil
+		if cfg and cfg.notebooks and cfg.notebooks.md_fold_default then
+			local cell = cell_model.cell_at(0, vim.v.lnum)
+			if cell and cell.type == "markdown" then
+				return ">2"
+			end
+		end
 		return ">1"
 	end
 
@@ -158,10 +152,10 @@ end
 function M.cell_fold_text()
 	local foldstart = vim.v.foldstart
 	local foldend = vim.v.foldend
-	local line = vim.fn.getline(foldstart)
 
-	-- Determine cell type
-	local cell_type = line:match("%[markdown%]") and "Markdown" or "Code"
+	-- Determine cell type via the cell model (F3)
+	local cell = require("pyworks.core.cell_model").cell_at(0, foldstart)
+	local cell_type = (cell and cell.type == "markdown") and "Markdown" or "Code"
 
 	-- Count lines in fold
 	local line_count = foldend - foldstart + 1
@@ -260,6 +254,7 @@ function M.setup_buffer(opts)
 		vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
 			group = augroup,
 			buffer = bufnr,
+			desc = "Pyworks: debounce cell-number refresh after edits",
 			callback = function()
 				if debounce_timers[bufnr] then
 					debounce_timers[bufnr]:stop()
@@ -285,11 +280,13 @@ function M.setup_buffer(opts)
 		vim.api.nvim_create_autocmd("BufEnter", {
 			group = augroup,
 			buffer = bufnr,
+			desc = "Pyworks: refresh cell numbers on buffer enter",
 			callback = M.number_cells,
 		})
 		vim.api.nvim_create_autocmd("BufDelete", {
 			group = augroup,
 			buffer = bufnr,
+			desc = "Pyworks: stop cell-number debounce timer on buffer delete",
 			callback = function()
 				if debounce_timers[bufnr] then
 					debounce_timers[bufnr]:stop()
@@ -324,19 +321,28 @@ function M.find_first_cell()
 end
 
 -- Move cursor below a cell marker
--- If marker is at end of file, adds an empty line first
+-- If marker is at end of file, adds an empty line first (unless
+-- opts.append = false — pure navigation never edits the buffer)
 -- @param marker_line: Line number of the cell marker
--- @param opts: Optional table with { insert_mode = true/false } (default: true)
+-- @param opts: Optional table with { insert_mode = true/false (default true),
+--   append = true/false (default true) }
 function M.enter_cell(marker_line, opts)
 	opts = opts or {}
 	local insert_mode = opts.insert_mode ~= false
+	local append = opts.append ~= false
 
 	local last_line = vim.api.nvim_buf_line_count(0)
 	local next_line = marker_line + 1
 
 	-- If marker is at or past the last line, add an empty line below
 	if next_line > last_line then
-		vim.fn.append(marker_line, "")
+		if append then
+			vim.fn.append(marker_line, "")
+		else
+			-- Pure navigation (e.g. run-all cursor parking) must not mutate
+			-- the buffer; land on the marker itself instead.
+			next_line = marker_line
+		end
 	end
 
 	vim.api.nvim_win_set_cursor(0, { next_line, 0 })
@@ -414,7 +420,13 @@ function M.create_floating_window(title, content, opts)
 		group = float_augroup,
 		buffer = buf,
 		once = true,
-		callback = close,
+		desc = "Pyworks: close floating window on leave",
+		callback = function()
+			-- The once-autocmd removes itself; delete the augroup so the
+			-- per-float group doesn't accumulate across open/close cycles
+			pcall(vim.api.nvim_del_augroup_by_name, "PyworksFloat_" .. buf)
+			close()
+		end,
 	})
 
 	return buf, win

@@ -390,13 +390,35 @@ function M.is_typosquat(package_name)
 		return nil
 	end
 
-	-- Threshold: 1 edit for tiny names, 2 otherwise
+	-- Prefix-squat rule: "scikit" (of scikit-learn), "panda" (of pandas),
+	-- "matplot" (of matplotlib) are classic squat registrations and are too
+	-- far in edit distance for the threshold below. Candidates that are a
+	-- proper prefix of a known package (>=5 chars) are flagged; closest =
+	-- shortest such known name, ties broken lexicographically so the
+	-- reported canonical name is stable across processes (pairs() hash
+	-- order is not).
+	if #norm >= 5 then
+		local best_name, best_len = nil, nil
+		for known_norm, canonical in pairs(known_packages) do
+			if #known_norm > #norm and known_norm:sub(1, #norm) == norm then
+				if not best_len or #known_norm < best_len or (#known_norm == best_len and canonical < best_name) then
+					best_len, best_name = #known_norm, canonical
+				end
+			end
+		end
+		if best_name then
+			return best_name, best_len - #norm
+		end
+	end
+
+	-- Threshold: 1 edit for tiny names, 2 otherwise. The distance bound
+	-- stays at min(max_dist, best_dist) so equal-distance candidates are
+	-- still measured — ties are broken lexicographically for determinism.
 	local max_dist = #norm <= 3 and 1 or 2
 	local best_name, best_dist = nil, max_dist + 1
 	for known_norm, canonical in pairs(known_packages) do
-		local d =
-			edit_distance_at_most(norm, known_norm, best_dist - 1 < 1 and max_dist or math.min(max_dist, best_dist - 1))
-		if d <= max_dist and d < best_dist then
+		local d = edit_distance_at_most(norm, known_norm, math.min(max_dist, best_dist))
+		if d < best_dist or (d == best_dist and d <= max_dist and canonical < best_name) then
 			best_dist, best_name = d, canonical
 		end
 	end
@@ -657,6 +679,19 @@ local function extract_python_imports(content)
 			return "import " .. table.concat(pkgs, ", ")
 		end)
 
+	-- Strip trailing/inline comments per line BEFORE import matching.
+	-- Without this, comment words inside a parenthesized multiline import
+	-- ("use the fast one") get extracted as import names — "comment" is a
+	-- real PyPI package, making this a live supply-chain suggestion.
+	local comment_stripped = {}
+	for line in normalized:gmatch("[^\r\n]+") do
+		-- Truncate at a # that is not inside a string literal is overkill
+		-- for import lines (imports rarely contain "#"); a simple split is
+		-- safe for the import-detection use case and avoids false imports.
+		table.insert(comment_stripped, (line:gsub("#.*$", "")))
+	end
+	normalized = table.concat(comment_stripped, "\n")
+
 	-- Process line by line
 	for line in normalized:gmatch("[^\r\n]+") do
 		-- Skip comments and empty lines
@@ -767,53 +802,58 @@ function M.scan_imports(filepath, language)
 	return imports
 end
 
--- Get installed packages for a language
-function M.get_installed_packages(language, filepath)
-	-- Include filepath in cache key to ensure we check the right project
-	local cache_key = "installed_packages_" .. language .. "_" .. (filepath or "global")
+-- Get installed packages for a language (async: the callback receives the
+-- installed list; cache hits resolve synchronously)
+function M.get_installed_packages(language, filepath, callback)
+	-- Key the cache per PROJECT (every file in one venv shares the same
+	-- installed list) instead of per file, so a whole project shares one
+	-- entry instead of duplicating one per file.
+	local project_root = require("pyworks.utils").get_project_paths(filepath)
+	local cache_key = "installed_packages_" .. language .. "_" .. (project_root or "global")
 	local cached = cache.get(cache_key)
 	if cached then
-		return cached
+		callback(cached)
+		return
 	end
-
-	local installed = {}
 
 	if language == "python" then
 		local python = require("pyworks.languages.python")
-		installed = python.get_installed_packages(filepath)
+		python.get_installed_packages(filepath, function(installed)
+			cache.set(cache_key, installed)
+			callback(installed)
+		end)
+		return
 	end
 
-	cache.set(cache_key, installed)
-
-	return installed
+	callback({})
 end
 
--- Detect missing packages
-function M.detect_missing_packages(filepath, language)
+-- Detect missing packages (async; the callback receives the missing list)
+function M.detect_missing_packages(filepath, language, callback)
 	local imports = M.scan_imports(filepath, language)
-	local installed = M.get_installed_packages(language, filepath) -- Pass filepath!
+	M.get_installed_packages(language, filepath, function(installed)
+		-- Convert installed list to a set for faster lookup
+		local installed_set = {}
+		for _, pkg in ipairs(installed) do
+			installed_set[pkg:lower()] = true
+		end
 
-	-- Convert installed list to a set for faster lookup
-	local installed_set = {}
-	for _, pkg in ipairs(installed) do
-		installed_set[pkg:lower()] = true
-	end
+		local missing = {}
+		for _, import_name in ipairs(imports) do
+			-- Skip standard library modules and custom/local packages
+			if not M.is_stdlib(import_name, language) and not M.is_custom_package(import_name, language) then
+				-- Map import name to package name
+				local package_name = M.map_import_to_package(import_name, language)
 
-	local missing = {}
-	for _, import_name in ipairs(imports) do
-		-- Skip standard library modules and custom/local packages
-		if not M.is_stdlib(import_name, language) and not M.is_custom_package(import_name, language) then
-			-- Map import name to package name
-			local package_name = M.map_import_to_package(import_name, language)
-
-			-- Check if installed
-			if not installed_set[package_name:lower()] then
-				table.insert(missing, package_name)
+				-- Check if installed
+				if not installed_set[package_name:lower()] then
+					table.insert(missing, package_name)
+				end
 			end
 		end
-	end
 
-	return missing
+		callback(missing)
+	end)
 end
 
 -- Check if a module is likely a custom/local package
@@ -874,15 +914,30 @@ function M.is_stdlib(module_name, language)
 	return false
 end
 
--- Validate package name for safety (prevents shell injection)
--- Package names should match PyPI naming: letters, numbers, hyphens, underscores, dots
+-- Validate package name for safety (prevents pip option injection and
+-- argument smuggling; all exec is array-form vim.system, so classic shell
+-- injection is not in play — but a name like "--index-url" would still be
+-- parsed by pip as an OPTION).
+-- Plain names: letters/digits, then _ . - [ ] (extras syntax).
+-- Optional PEP 440-ish specifier: comparison ops followed by digits/dots.
+local BODY = "[a-zA-Z0-9_][a-zA-Z0-9_.%-]*"
+local EXTRAS = "%[[a-zA-Z0-9_.,%-]*%]"
+local PACKAGE_PATTERNS = {
+	"^" .. BODY .. "$",
+	"^" .. BODY .. EXTRAS .. "$",
+	"^" .. BODY .. EXTRAS .. "[<>=!~]+[0-9.]+$",
+	"^" .. BODY .. "[<>=!~]+[0-9.]+$",
+}
 local function is_valid_package_name(name)
 	if not name or name == "" then
 		return false
 	end
-	-- PyPI package naming: alphanumeric, hyphens, underscores, dots, brackets for extras
-	-- Also allow version specifiers: ==, >=, <=, ~=, etc.
-	return name:match("^[a-zA-Z0-9_.%-]+[%[%]a-zA-Z0-9_.%-,]*[<>=!~]*[0-9.]*$") ~= nil
+	for _, pattern in ipairs(PACKAGE_PATTERNS) do
+		if name:find(pattern) then
+			return true
+		end
+	end
+	return false
 end
 
 -- Filter packages to only valid names
@@ -899,49 +954,26 @@ function M.validate_package_names(packages)
 	return valid, invalid
 end
 
--- Install packages (Python only)
-function M.install_packages(packages, language)
-	if #packages == 0 then
-		return
-	end
-
-	-- Validate package names before installation
-	local valid_packages, invalid_packages = M.validate_package_names(packages)
-	if #invalid_packages > 0 then
-		notifications.notify(
-			string.format("Skipping invalid package names: %s", table.concat(invalid_packages, ", ")),
-			vim.log.levels.WARN
-		)
-	end
-
-	if #valid_packages == 0 then
-		return
-	end
-
-	if language == "python" then
-		local python = require("pyworks.languages.python")
-		python.install_packages(valid_packages)
-	end
-end
-
--- Re-scan imports after file save
+-- Re-scan imports after file save (async internally; results notify)
 function M.rescan_for_language(filepath, language)
 	-- Invalidate cache
 	cache.invalidate("imports_" .. filepath .. "_" .. language)
 
 	-- Detect missing packages
-	local missing = M.detect_missing_packages(filepath, language)
-
-	if #missing > 0 then
-		notifications.notify_missing_packages(missing, language)
-	end
+	M.detect_missing_packages(filepath, language, function(missing)
+		if #missing > 0 then
+			notifications.notify_missing_packages(missing, language)
+		end
+	end)
 end
 
--- Analyze current buffer
-function M.analyze_buffer(language)
+-- Analyze current buffer (async; the callback receives
+-- { imports, installed, missing })
+function M.analyze_buffer(language, callback)
 	local filepath = vim.api.nvim_buf_get_name(0)
 	if filepath == "" then
-		return { imports = {}, missing = {}, installed = {} }
+		callback({ imports = {}, missing = {}, installed = {} })
+		return
 	end
 
 	-- Ensure absolute path
@@ -950,14 +982,15 @@ function M.analyze_buffer(language)
 	end
 
 	local imports = M.scan_imports(filepath, language)
-	local installed = M.get_installed_packages(language, filepath)
-	local missing = M.detect_missing_packages(filepath, language)
-
-	return {
-		imports = imports,
-		installed = installed,
-		missing = missing,
-	}
+	M.get_installed_packages(language, filepath, function(installed)
+		M.detect_missing_packages(filepath, language, function(missing)
+			callback({
+				imports = imports,
+				installed = installed,
+				missing = missing,
+			})
+		end)
+	end)
 end
 
 return M

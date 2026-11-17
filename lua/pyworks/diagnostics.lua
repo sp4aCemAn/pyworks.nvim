@@ -112,10 +112,8 @@ function M.run_diagnostics()
 	local python_path = vim.fn.exepath("python3")
 	if python_path ~= "" then
 		table.insert(report, "  python3: " .. python_path)
-		local py_ok, py_result = pcall(function()
-			return vim.system({ "python3", "--version" }, { text = true }):wait()
-		end)
-		local version = (py_ok and py_result and py_result.stdout) and py_result.stdout:gsub("\n", "") or "unknown"
+		local py_ok, py_output = utils.system_with_timeout({ "python3", "--version" }, 10000)
+		local version = (py_ok and py_output) and py_output:gsub("\n", "") or "unknown"
 		table.insert(report, "  Version: " .. version)
 	else
 		table.insert(report, "  python3: NOT FOUND")
@@ -126,10 +124,8 @@ function M.run_diagnostics()
 	table.insert(report, "UV Package Manager:")
 	if vim.fn.executable("uv") == 1 then
 		table.insert(report, "  uv: " .. vim.fn.exepath("uv"))
-		local uv_ok, uv_result = pcall(function()
-			return vim.system({ "uv", "--version" }, { text = true }):wait()
-		end)
-		local version = (uv_ok and uv_result and uv_result.stdout) and uv_result.stdout:gsub("\n", "") or "unknown"
+		local uv_ok, uv_output = utils.system_with_timeout({ "uv", "--version" }, 10000)
+		local version = (uv_ok and uv_output) and uv_output:gsub("\n", "") or "unknown"
 		table.insert(report, "  Version: " .. version)
 	else
 		table.insert(report, "  uv: NOT FOUND")

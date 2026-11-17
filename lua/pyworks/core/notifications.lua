@@ -75,12 +75,7 @@ function M.notify(message, level, options)
 	options = options or {}
 	level = level or vim.log.levels.INFO
 
-	-- Check if we should suppress
-	if should_suppress(message) and not options.force then
-		return
-	end
-
-	-- Debug mode - always show
+	-- Debug mode - always show (bypasses dedup: each occurrence is shown)
 	if config.debug_mode then
 		vim.notify("[Pyworks] " .. message, level)
 		return
@@ -110,9 +105,17 @@ function M.notify(message, level, options)
 		should_show = level >= vim.log.levels.WARN
 	end
 
-	if should_show then
-		vim.notify(message, level)
+	if not should_show then
+		return
 	end
+
+	-- Dedup BEFORE display (a suppressed-undisplayed message must not
+	-- poison the dedup window for an actually-shown duplicate later)
+	if should_suppress(message) and not options.force then
+		return
+	end
+
+	vim.notify(message, level)
 end
 
 -- Progress notification with optional spinner

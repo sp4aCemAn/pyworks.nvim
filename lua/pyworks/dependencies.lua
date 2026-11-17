@@ -130,6 +130,22 @@ function M.ensure_dependencies()
 					table.insert(issues, "Image.nvim not installed")
 					return false
 				end
+
+				-- Defer to a user-provided lazy config: if the user wired
+				-- image.nvim through lazy.nvim with their own setup
+				-- (`config` fn or `opts`), calling ours here would pre-empt
+				-- theirs (and a later double-setup errors out).
+				local lazy_ok, lazy = pcall(require, "lazy.core.config")
+				if lazy_ok and lazy.plugins then
+					for _, spec in pairs(lazy.plugins) do
+						if spec and (spec.name == "image.nvim" or tostring(spec[1]):match("image%.nvim$")) then
+							if spec.config ~= nil or spec.opts ~= nil then
+								return true
+							end
+						end
+					end
+				end
+
 				-- Try to configure if not already done
 				local ok, img = pcall(require, "image")
 				if ok and img.setup then
@@ -215,12 +231,11 @@ function M.register_molten()
 	-- Use the Python host that pyworks has configured
 	local python_cmd = vim.g.python3_host_prog or "python3"
 
-	-- Check if pynvim is available using vim.system (Neovim 0.10+)
-	local ok, result = pcall(function()
-		return vim.system({ python_cmd, "-c", "import pynvim" }, { text = true }):wait()
-	end)
+	-- Check if pynvim is available (30s timeout: a hung python host must
+	-- not freeze the editor indefinitely)
+	local success, _, _ = require("pyworks.utils").system_with_timeout({ python_cmd, "-c", "import pynvim" }, 30000)
 
-	if not ok or not result or result.code ~= 0 then
+	if not success then
 		-- pynvim not installed - will be handled by pyworks essentials
 		return false
 	end

@@ -1,5 +1,5 @@
 -- pyworks.nvim - Zero-config Python notebook support
--- Version: 3.0.3
+-- Version: 0.4.0
 --
 -- Features:
 -- - Automatic environment setup for Python
@@ -16,6 +16,10 @@ local POST_SETUP_DELAY_MS = 500 -- Delay after environment setup before detectio
 -- Dependencies
 local dependencies = require("pyworks.dependencies")
 local error_handler = require("pyworks.core.error_handler")
+
+-- Forward declaration: defined below, called from setup() (the manual
+-- commands used to register at module load — a known wart)
+local register_manual_commands
 
 -- Default configuration
 local default_config = {
@@ -38,6 +42,10 @@ local default_config = {
 			"^utils$",
 			"^helpers$",
 		},
+		-- Missing-package tracking scope for <leader>pi / :PyworksSync:
+		-- "project" (Colab-like: each project tracks its own detected
+		-- missing packages) or "global" (one shared list).
+		sync_scope = "project",
 	},
 	cache = {
 		kernel_list = 60, -- Cache TTL in seconds
@@ -60,6 +68,14 @@ local default_config = {
 	cell_marker = "# %%", -- Cell delimiter pattern (e.g. "# COMMAND ----------" for Databricks)
 	auto_detect = true, -- Automatically detect and setup on file open
 	skip_keymaps = false, -- Skip all keymap setup (define your own)
+	notebooks = {
+		lsp = "silence", -- "silence": drop diagnostics inside markdown cells;
+		-- "detach": fully detach LSP clients from notebook buffers;
+		-- "attach": status quo (server sees raw markdown as broken Python)
+		md_formatter = { "pandoc", "-f", "gfm", "-t", "markdown" }, -- argv for formatting markdown cell content
+		md_conceal = true, -- hide the markdown "# " comment prefix inline (matchadd concealment)
+		md_fold_default = false, -- collapse markdown cells when a notebook opens (needs folding)
+	},
 }
 
 -- Plugin configuration
@@ -105,10 +121,53 @@ local function validate_config(user_opts)
 		end
 	end
 
+	-- Check packages config
+	if user_opts.packages then
+		local valid_sync_scopes = { project = true, global = true }
+		if user_opts.packages.sync_scope ~= nil then
+			if
+				type(user_opts.packages.sync_scope) ~= "string" or not valid_sync_scopes[user_opts.packages.sync_scope]
+			then
+				table.insert(warnings, "packages.sync_scope should be one of 'project', 'global'")
+			end
+		end
+	end
+
 	-- Check molten config
 	if user_opts.molten then
 		if user_opts.molten.virt_text_max_lines ~= nil and type(user_opts.molten.virt_text_max_lines) ~= "number" then
 			table.insert(warnings, "molten.virt_text_max_lines should be a number")
+		end
+	end
+
+	-- Check notebooks config
+	if user_opts.notebooks then
+		local valid_lsp_modes = { silence = true, detach = true, attach = true }
+		if user_opts.notebooks.lsp ~= nil then
+			if type(user_opts.notebooks.lsp) ~= "string" or not valid_lsp_modes[user_opts.notebooks.lsp] then
+				table.insert(warnings, "notebooks.lsp should be one of 'silence', 'detach', 'attach'")
+			end
+		end
+		if user_opts.notebooks.md_conceal ~= nil and type(user_opts.notebooks.md_conceal) ~= "boolean" then
+			table.insert(warnings, "notebooks.md_conceal should be boolean")
+		end
+		if user_opts.notebooks.md_fold_default ~= nil and type(user_opts.notebooks.md_fold_default) ~= "boolean" then
+			table.insert(warnings, "notebooks.md_fold_default should be boolean")
+		end
+		if user_opts.notebooks.md_formatter ~= nil then
+			local formatter = user_opts.notebooks.md_formatter
+			local is_string_array = type(formatter) == "table" and #formatter > 0
+			if is_string_array then
+				for _, arg in ipairs(formatter) do
+					if type(arg) ~= "string" then
+						is_string_array = false
+						break
+					end
+				end
+			end
+			if not is_string_array then
+				table.insert(warnings, "notebooks.md_formatter should be a non-empty array of strings (argv)")
+			end
 		end
 	end
 
@@ -140,9 +199,14 @@ function M.configure_dependencies(opts)
 		vim.g.molten_auto_image_popup = false
 		vim.g.molten_tick_rate = 100
 
-		-- After kernel is ready, configure pandas to use full terminal width
+		-- After kernel is ready, configure pandas to use full terminal width.
+		-- Own augroup with clear=true: configure_dependencies is a public
+		-- function and re-invocation must not stack duplicate handlers.
+		local kernel_ready_group = vim.api.nvim_create_augroup("PyworksMoltenKernelReady", { clear = true })
 		vim.api.nvim_create_autocmd("User", {
+			group = kernel_ready_group,
 			pattern = "MoltenKernelReady",
+			desc = "Pyworks: set pandas display width on kernel ready",
 			callback = function()
 				local cols = vim.o.columns
 				local code = string.format(
@@ -232,6 +296,12 @@ function M.setup(opts)
 	-- Merge user configuration with defaults
 	config = vim.tbl_deep_extend("force", default_config, opts or {})
 
+	-- Lists replace, never index-merge: tbl_deep_extend merges arrays
+	-- element-wise, so a user-supplied short list leaks the default tail.
+	if opts.notebooks and opts.notebooks.md_formatter then
+		config.notebooks.md_formatter = opts.notebooks.md_formatter
+	end
+
 	-- Configure core modules
 	local cache = require("pyworks.core.cache")
 	cache.configure(config.cache)
@@ -251,6 +321,12 @@ function M.setup(opts)
 	local cell_engine = require("pyworks.core.cell_engine")
 	cell_engine.configure({ cell_marker = config.cell_marker })
 
+	-- Notebook-aware LSP diagnostics handling ("silence"/"attach")
+	require("pyworks.notebook.lsp").install()
+
+	-- Inline markdown concealment chrome for notebook windows (Model A F6)
+	require("pyworks.notebook.md_view").setup()
+
 	-- Initialize state (load persistent data, then start session)
 	local state = require("pyworks.core.state")
 	state.init()
@@ -266,6 +342,8 @@ function M.setup(opts)
 
 	-- Load notebook creation commands
 	require("pyworks.commands.create")
+	-- Load markdown cell formatting command
+	require("pyworks.commands.format_cell")
 
 	-- Cell operation commands (for skip_keymaps users — Issue #4)
 	vim.api.nvim_create_user_command("PyworksNextCell", function()
@@ -313,207 +391,213 @@ function M.setup(opts)
 	vim.api.nvim_create_user_command("PyworksRunCellAdvance", function()
 		require("pyworks.core.cell_engine").run_cell({ advance = true })
 	end, { desc = "Run current cell and move to next" })
+
+	register_manual_commands()
 end
 
 -- Manual commands (for power users)
--- These are optional - the plugin works without them
+-- These are optional - the plugin works without them.
+-- Registered inside setup() (previously at module load: requiring the
+-- module side-effected command registration).
+register_manual_commands = function()
+	-- Command to manually trigger environment setup
+	vim.api.nvim_create_user_command("PyworksSetup", function()
+		local filepath = vim.api.nvim_buf_get_name(0)
 
--- Command to manually trigger environment setup
-vim.api.nvim_create_user_command("PyworksSetup", function()
-	local filepath = vim.api.nvim_buf_get_name(0)
+		-- If no file is open, use cwd as the project directory
+		if filepath == "" then
+			local cwd = vim.fn.getcwd()
+			vim.notify("Setting up Python environment in: " .. cwd, vim.log.levels.INFO)
 
-	-- If no file is open, use cwd as the project directory
-	if filepath == "" then
-		local cwd = vim.fn.getcwd()
-		vim.notify("Setting up Python environment in: " .. cwd, vim.log.levels.INFO)
+			-- Create venv in cwd
+			local python = require("pyworks.languages.python")
+			local utils = require("pyworks.utils")
 
-		-- Create venv in cwd
-		local python = require("pyworks.languages.python")
-		local utils = require("pyworks.utils")
-
-		-- Use a dummy filepath in cwd to get project paths
-		local dummy_filepath = cwd .. "/setup.py"
-		local ok = error_handler.protected_call(python.ensure_environment, "Setup failed", dummy_filepath)
-		if ok then
-			vim.notify("Python environment ready", vim.log.levels.INFO)
-			-- Re-configure notebook handler after packages are installed (async)
-			vim.defer_fn(function()
-				local jupytext = require("pyworks.notebook.jupytext")
-				local cache = require("pyworks.core.cache")
-				cache.invalidate("jupytext_installed")
-				jupytext.configure_notebook_handler()
-			end, 2000) -- Wait for async package installation
-		end
-		return
-	end
-
-	-- Validate filepath
-	filepath = error_handler.validate_filepath(filepath, "setup environment")
-	if not filepath then
-		return
-	end
-
-	-- Determine file type and run appropriate setup
-	local ext = vim.fn.fnamemodify(filepath, ":e")
-	local ft = vim.bo.filetype
-
-	if ext == "py" or ft == "python" or ext == "ipynb" then
-		local python = require("pyworks.languages.python")
-		local ok = error_handler.protected_call(python.ensure_environment, "Setup failed", filepath)
-		if ok then
-			vim.notify("Python environment ready", vim.log.levels.INFO)
-			-- Re-configure notebook handler after packages are installed (async)
-			vim.defer_fn(function()
-				local jupytext = require("pyworks.notebook.jupytext")
-				local cache = require("pyworks.core.cache")
-				cache.invalidate("jupytext_installed")
-				jupytext.configure_notebook_handler()
-				-- Then trigger file detection
-				local detector = require("pyworks.core.detector")
-				detector.on_file_open(filepath)
-			end, POST_SETUP_DELAY_MS)
-		end
-	else
-		vim.notify("Pyworks only supports Python files", vim.log.levels.INFO)
-	end
-end, {
-	desc = "Manually trigger Pyworks environment setup for current file or cwd",
-})
-
--- Command to sync (install missing) packages
-vim.api.nvim_create_user_command("PyworksSync", function()
-	local ft = vim.bo.filetype
-	if ft == "python" then
-		local python = require("pyworks.languages.python")
-		error_handler.protected_call(python.install_missing_packages, "Package sync failed")
-	else
-		vim.notify("Pyworks only supports Python files", vim.log.levels.INFO)
-	end
-end, {
-	desc = "Sync packages - install missing packages detected from imports",
-})
-
--- Command to show package status
-vim.api.nvim_create_user_command("PyworksStatus", function()
-	local packages = require("pyworks.core.packages")
-	local ft = vim.bo.filetype
-
-	if ft == "python" then
-		local result = packages.analyze_buffer("python")
-
-		vim.notify(
-			string.format(
-				"[Python] Imports: %d | Installed: %d | Missing: %d",
-				#result.imports,
-				#result.installed,
-				#result.missing
-			),
-			vim.log.levels.INFO
-		)
-
-		if #result.missing > 0 then
-			vim.notify("Missing packages: " .. table.concat(result.missing, ", "), vim.log.levels.WARN)
-		end
-	else
-		vim.notify("Pyworks: Not a Python file", vim.log.levels.INFO)
-	end
-end, {
-	desc = "Show package status for current file",
-})
-
--- Package management commands
-vim.api.nvim_create_user_command("PyworksAdd", function(opts)
-	local python = require("pyworks.languages.python")
-	if opts.args and opts.args ~= "" then
-		python.install_python_packages(opts.args)
-	else
-		vim.ui.input({ prompt = "Packages to add (space/comma separated): " }, function(input)
-			if input and input ~= "" then
-				python.install_python_packages(input)
+			-- Use a dummy filepath in cwd to get project paths
+			local dummy_filepath = cwd .. "/setup.py"
+			local ok = error_handler.protected_call(python.ensure_environment, "Setup failed", dummy_filepath)
+			if ok then
+				vim.notify("Python environment ready", vim.log.levels.INFO)
+				-- Re-configure notebook handler after packages are installed (async)
+				vim.defer_fn(function()
+					local jupytext = require("pyworks.notebook.jupytext")
+					local cache = require("pyworks.core.cache")
+					cache.invalidate("jupytext_installed")
+					jupytext.configure_notebook_handler()
+				end, 2000) -- Wait for async package installation
 			end
-		end)
-	end
-end, {
-	nargs = "*",
-	desc = "Add packages to project virtual environment",
-	complete = function()
-		return { "numpy", "pandas", "matplotlib", "requests", "pytest", "black", "flake8", "mypy" }
-	end,
-})
+			return
+		end
 
-vim.api.nvim_create_user_command("PyworksRemove", function(opts)
-	local python = require("pyworks.languages.python")
-	if opts.args and opts.args ~= "" then
-		python.uninstall_python_packages(opts.args)
-	else
-		vim.ui.input({ prompt = "Packages to remove (space/comma separated): " }, function(input)
-			if input and input ~= "" then
-				python.uninstall_python_packages(input)
+		-- Validate filepath
+		filepath = error_handler.validate_filepath(filepath, "setup environment")
+		if not filepath then
+			return
+		end
+
+		-- Determine file type and run appropriate setup
+		local ext = vim.fn.fnamemodify(filepath, ":e")
+		local ft = vim.bo.filetype
+
+		if ext == "py" or ft == "python" or ext == "ipynb" then
+			local python = require("pyworks.languages.python")
+			local ok = error_handler.protected_call(python.ensure_environment, "Setup failed", filepath)
+			if ok then
+				vim.notify("Python environment ready", vim.log.levels.INFO)
+				-- Re-configure notebook handler after packages are installed (async)
+				vim.defer_fn(function()
+					local jupytext = require("pyworks.notebook.jupytext")
+					local cache = require("pyworks.core.cache")
+					cache.invalidate("jupytext_installed")
+					jupytext.configure_notebook_handler()
+					-- Then trigger file detection
+					local detector = require("pyworks.core.detector")
+					detector.on_file_open(filepath)
+				end, POST_SETUP_DELAY_MS)
 			end
-		end)
-	end
-end, {
-	nargs = "*",
-	desc = "Remove packages from project virtual environment",
-})
+		else
+			vim.notify("Pyworks only supports Python files", vim.log.levels.INFO)
+		end
+	end, {
+		desc = "Manually trigger Pyworks environment setup for current file or cwd",
+	})
 
-vim.api.nvim_create_user_command("PyworksList", function()
-	local python = require("pyworks.languages.python")
-	python.list_python_packages()
-end, {
-	desc = "List installed packages in project virtual environment",
-})
+	-- Command to sync (install missing) packages
+	vim.api.nvim_create_user_command("PyworksSync", function()
+		local ft = vim.bo.filetype
+		if ft == "python" then
+			local python = require("pyworks.languages.python")
+			error_handler.protected_call(python.install_missing_packages, "Package sync failed")
+		else
+			vim.notify("Pyworks only supports Python files", vim.log.levels.INFO)
+		end
+	end, {
+		desc = "Sync packages - install missing packages detected from imports",
+	})
 
-vim.api.nvim_create_user_command("PyworksDiagnostics", function()
-	require("pyworks.diagnostics").run_diagnostics()
-end, {
-	desc = "Run Pyworks diagnostics to check environment setup",
-})
+	-- Command to show package status
+	vim.api.nvim_create_user_command("PyworksStatus", function()
+		local packages = require("pyworks.core.packages")
+		local ft = vim.bo.filetype
 
-vim.api.nvim_create_user_command("PyworksHelp", function()
-	local ui = require("pyworks.ui")
-	local help = {
-		"",
-		"  COMMANDS",
-		"    :PyworksNewPython [name]      Create Python file     :PyworksSetup        Create venv",
-		"    :PyworksNewPythonNotebook     Create .ipynb file     :PyworksStatus       Package status",
-		"    :PyworksAdd/Remove [pkg]      Add/remove packages    :PyworksList         List packages",
-		"    :PyworksSync                  Install missing        :PyworksDiagnostics  Run diagnostics",
-		"    :PyworksReloadNotebook        Reload notebook        :PyworksResetReloadGuard  Fix stuck reload",
-		"",
-		"  CELL EXECUTION                                  CELL NAVIGATION",
-		"    <leader>jl   Run line (auto-init kernel)        <leader>j]   Next cell",
-		"    <leader>jr   Run selection (visual)             <leader>j[   Previous cell",
-		"    <leader>jj   Run cell + move to next            <leader>jv   Visual select cell",
-		"    <leader>jk   Run cell (stay in place)           <leader>jg   Go to cell N",
-		"    <leader>jR   Run all cells (waits for each)",
-		"",
-		"  CELL CREATION                                   CELL OPERATIONS",
-		"    <leader>ja   Insert code cell above             <leader>jt   Toggle code/markdown",
-		"    <leader>jb   Insert code cell below             <leader>jJ   Merge with cell below",
-		"    <leader>jma  Insert markdown above              <leader>js   Split cell at cursor",
-		"    <leader>jmb  Insert markdown below",
-		"",
-		"  OUTPUT MANAGEMENT                               CELL FOLDING",
-		"    <leader>jd   Clear cell output                  <leader>jf   Toggle folding on/off",
-		"                                                    <leader>jc   Collapse current cell",
-		"                                                    <leader>jC   Collapse all cells",
-		"                                                    <leader>je   Expand current cell",
-		"  KERNEL MANAGEMENT                               <leader>jE   Expand all cells",
-		"    <leader>mi   Initialize kernel                  <leader>jn   Refresh cell numbers",
-		"    <leader>mr   Restart kernel",
-		"    <leader>mx   Interrupt execution              PACKAGE MANAGEMENT",
-		"    <leader>mI   Show kernel info                   <leader>pi   Install missing packages",
-		"                                                    <leader>ps   Show package status",
-		"",
-		"  Press q or <Esc> to close",
-		"",
-	}
+		if ft == "python" then
+			packages.analyze_buffer("python", function(result)
+				vim.notify(
+					string.format(
+						"[Python] Imports: %d | Installed: %d | Missing: %d",
+						#result.imports,
+						#result.installed,
+						#result.missing
+					),
+					vim.log.levels.INFO
+				)
 
-	ui.create_floating_window(" Pyworks ", help)
-end, {
-	desc = "Show Pyworks commands and keymaps",
-})
+				if #result.missing > 0 then
+					vim.notify("Missing packages: " .. table.concat(result.missing, ", "), vim.log.levels.WARN)
+				end
+			end)
+		else
+			vim.notify("Pyworks: Not a Python file", vim.log.levels.INFO)
+		end
+	end, {
+		desc = "Show package status for current file",
+	})
+
+	-- Package management commands
+	vim.api.nvim_create_user_command("PyworksAdd", function(opts)
+		local python = require("pyworks.languages.python")
+		if opts.args and opts.args ~= "" then
+			python.install_python_packages(opts.args)
+		else
+			vim.ui.input({ prompt = "Packages to add (space/comma separated): " }, function(input)
+				if input and input ~= "" then
+					python.install_python_packages(input)
+				end
+			end)
+		end
+	end, {
+		nargs = "*",
+		desc = "Add packages to project virtual environment",
+		complete = function()
+			return { "numpy", "pandas", "matplotlib", "requests", "pytest", "black", "flake8", "mypy" }
+		end,
+	})
+
+	vim.api.nvim_create_user_command("PyworksRemove", function(opts)
+		local python = require("pyworks.languages.python")
+		if opts.args and opts.args ~= "" then
+			python.uninstall_python_packages(opts.args)
+		else
+			vim.ui.input({ prompt = "Packages to remove (space/comma separated): " }, function(input)
+				if input and input ~= "" then
+					python.uninstall_python_packages(input)
+				end
+			end)
+		end
+	end, {
+		nargs = "*",
+		desc = "Remove packages from project virtual environment",
+	})
+
+	vim.api.nvim_create_user_command("PyworksList", function()
+		local python = require("pyworks.languages.python")
+		python.list_python_packages()
+	end, {
+		desc = "List installed packages in project virtual environment",
+	})
+
+	vim.api.nvim_create_user_command("PyworksDiagnostics", function()
+		require("pyworks.diagnostics").run_diagnostics()
+	end, {
+		desc = "Run Pyworks diagnostics to check environment setup",
+	})
+
+	vim.api.nvim_create_user_command("PyworksHelp", function()
+		local ui = require("pyworks.ui")
+		local help = {
+			"",
+			"  COMMANDS",
+			"    :PyworksNewPython [name]      Create Python file     :PyworksSetup        Create venv",
+			"    :PyworksNewPythonNotebook     Create .ipynb file     :PyworksStatus       Package status",
+			"    :PyworksAdd/Remove [pkg]      Add/remove packages    :PyworksList         List packages",
+			"    :PyworksSync                  Install missing        :PyworksDiagnostics  Run diagnostics",
+			"    :PyworksReloadNotebook        Reload notebook        :PyworksResetReloadGuard  Fix stuck reload",
+			"",
+			"  CELL EXECUTION                                  CELL NAVIGATION",
+			"    <leader>jl   Run line (auto-init kernel)        <leader>j]   Next cell",
+			"    <leader>jr   Run selection (visual)             <leader>j[   Previous cell",
+			"    <leader>jj   Run cell + move to next            <leader>jv   Visual select cell",
+			"    <leader>jk   Run cell (stay in place)           <leader>jg   Go to cell N",
+			"    <leader>jR   Run all cells (waits for each)",
+			"",
+			"  CELL CREATION                                   CELL OPERATIONS",
+			"    :PyworksFormatMarkdownCell    Format md cell       <leader>jt   Toggle code/markdown",
+			"    <leader>ja   Insert code cell above             <leader>jJ   Merge with cell below",
+			"    <leader>jb   Insert code cell below             <leader>js   Split cell at cursor",
+			"    <leader>jma  Insert markdown above              <leader>jm   Format markdown cell",
+			"    <leader>jmb  Insert markdown below",
+			"",
+			"  OUTPUT MANAGEMENT                               CELL FOLDING",
+			"    <leader>jd   Clear cell output                  <leader>jf   Toggle folding on/off",
+			"                                                    <leader>jc   Collapse current cell",
+			"                                                    <leader>jC   Collapse all cells",
+			"                                                    <leader>je   Expand current cell",
+			"  KERNEL MANAGEMENT                               <leader>jE   Expand all cells",
+			"    <leader>mi   Initialize kernel                  <leader>jn   Refresh cell numbers",
+			"    <leader>mr   Restart kernel",
+			"    <leader>mx   Interrupt execution              PACKAGE MANAGEMENT",
+			"    <leader>mI   Show kernel info                   <leader>pi   Install missing packages",
+			"                                                    <leader>ps   Show package status",
+			"",
+			"  Press q or <Esc> to close",
+			"",
+		}
+
+		ui.create_floating_window(" Pyworks ", help)
+	end, {
+		desc = "Show Pyworks commands and keymaps",
+	})
+end
 
 -- Export configuration for other modules
 function M.get_config()

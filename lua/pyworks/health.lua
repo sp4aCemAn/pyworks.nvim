@@ -3,6 +3,8 @@
 
 local M = {}
 
+local utils = require("pyworks.utils")
+
 function M.check()
 	local health = vim.health or require("health")
 
@@ -114,12 +116,10 @@ function M.check()
 	if vim.g.python3_host_prog then
 		health.ok(string.format("Python host set to: %s", vim.g.python3_host_prog))
 
-		-- Verify it works using vim.system (Neovim 0.10+)
-		local ok, sys_result = pcall(function()
-			return vim.system({ vim.g.python3_host_prog, "--version" }, { text = true }):wait()
-		end)
-		if ok and sys_result and sys_result.code == 0 then
-			local version = (sys_result.stdout or ""):match("Python (%d+%.%d+%.%d+)")
+		-- Verify it works (30s timeout: a hung host must not hang :checkhealth)
+		local ok, version_output = utils.system_with_timeout({ vim.g.python3_host_prog, "--version" }, 30000)
+		if ok then
+			local version = version_output:match("Python (%d+%.%d+%.%d+)")
 			if version then
 				health.ok(string.format("Python host version: %s", version))
 			end

@@ -51,6 +51,7 @@ describe("integration", function()
 				"PyworksSplitCell",
 				"PyworksRunCell",
 				"PyworksRunCellAdvance",
+				"PyworksFormatMarkdownCell",
 			}
 
 			for _, cmd in ipairs(expected_commands) do
@@ -470,13 +471,9 @@ describe("integration", function()
 		end)
 
 		it("should wrap functions with error handling", function()
-			local wrapped = error_handler.wrap(function(x)
-				return x * 2
-			end, "Doubling")
-
-			local ok, result = wrapped(5)
-			assert.is_true(ok)
-			assert.are.equal(10, result)
+			-- wrap() was removed (dead code, 2026-11 sweep): callers should
+			-- use protected_call directly
+			assert.is_nil(error_handler.wrap)
 		end)
 	end)
 
@@ -502,14 +499,16 @@ describe("integration", function()
 		end)
 
 		it("should deduplicate repeated messages", function()
-			-- First call should not be suppressed
-			-- Second identical call within TTL should be suppressed
+			-- Dedup applies to messages that are actually SHOWN. A shown
+			-- message is recorded; an identical repeat inside the dedup
+			-- window is suppressed (not recorded again). Undisplayed
+			-- messages (silent_when_ready) must NOT enter the history —
+			-- that would poison the dedup window for a real duplicate.
 			local history_before = #notifications.get_history()
-			notifications.notify("duplicate test", vim.log.levels.WARN)
+			notifications.notify("dedup test", vim.log.levels.WARN, { error = true })
 			assert.are.equal(history_before + 1, #notifications.get_history())
 
-			-- Same message again - should be suppressed (not added to history again)
-			notifications.notify("duplicate test", vim.log.levels.WARN)
+			notifications.notify("dedup test", vim.log.levels.WARN, { error = true })
 			assert.are.equal(history_before + 1, #notifications.get_history())
 		end)
 
@@ -527,7 +526,7 @@ describe("integration", function()
 		end)
 
 		it("should clear history", function()
-			notifications.notify("test msg", vim.log.levels.WARN)
+			notifications.notify("test msg", vim.log.levels.WARN, { error = true })
 			assert.is_true(#notifications.get_history() > 0)
 			notifications.clear_history()
 			assert.are.equal(0, #notifications.get_history())

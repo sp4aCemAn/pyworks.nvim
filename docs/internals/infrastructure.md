@@ -74,9 +74,10 @@ in `protected_call`; library code uses notifications module.
 ## utils.lua — paths + subprocess wrappers
 
 - System wrappers (see environment.md invariants): `async_system_call`
-  (line 256, callback `(success, stdout, stderr, exit_code)`, signal 15/9 →
-  timeout msg) and `system_with_timeout` (line 299, blocking with uv-level
-  timeout, default 30s).
+  (callback `(success, stdout, stderr, exit_code)`, signal 15/9 →
+  timeout msg) and `system_with_timeout` (blocking with uv-level timeout,
+  default 30s; since v0.4.0 accepts `{ stdin, cwd, env }` options and
+  surfaces stderr when stdout is empty on failure).
 - Path helpers: `ensure_venv_in_path` (line 42, prepends venv/bin to
   `vim.env.PATH` once — process-global mutation), `better_select` (line 80,
   vim.ui.select + numeric fallback), `safe_file_read/write` (lines 327/351,
@@ -88,21 +89,25 @@ in `protected_call`; library code uses notifications module.
 
 ## health.lua / diagnostics.lua — two views, different jobs
 
-`:checkhealth pyworks` (health.lua:6) — standard vim.health report:
-module loads, deps via `dependencies.check_health` (dependencies.lua:247),
-venv/essentials (sync `is_package_installed` probes — slow), host sanity,
-cache stats, autocmd presence. `:PyworksDiagnostics` (diagnostics.lua:77) —
-human buffer dump (cwd `.venv`-centric; note: doesn't use
-`get_project_paths`, intentionally cwd-scoped). Prefer extending health.lua.
+`:checkhealth pyworks` (health.lua) — standard vim.health report:
+module loads, deps via `dependencies.check_health`,
+venv/essentials (sync `is_package_installed` probes — slow but
+user-invoked and timeout-bounded), host sanity, cache stats, autocmd
+presence. `:PyworksDiagnostics` (diagnostics.lua) — human buffer dump
+(cwd `.venv`-centric; note: doesn't use `get_project_paths`,
+intentionally cwd-scoped). Prefer extending health.lua.
 
 ## Invariants
 
 - Never bypass the notifications module in library code (dedup + levels are
-  a UX contract; direct `vim.notify` only in commands/UI surfaces).
+  a UX contract; direct `vim.notify` only in commands/UI surfaces). Dedup
+  history records only messages that are actually displayed.
 - New persisted state keys must be `^persistent_`/`^initialized_` prefixed
-  or they will silently not survive restarts.
+  or they will silently not survive restarts; ALL state writes (including
+  the convenience helpers) go through the shared setter so persistence
+  keeps scheduling saves.
 - All cache keys must have a deliberate invalidation point (install →
-  `installed_packages_python`, save → `imports_...`, setup →
+  `^installed_packages_` pattern, save → `imports_...`, setup →
   `venv_check`/`jupytext_installed`).
 
 ## Covered by

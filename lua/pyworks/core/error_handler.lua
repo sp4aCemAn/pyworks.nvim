@@ -38,8 +38,8 @@ function M.validate_filepath(filepath, operation)
 		filepath = vim.fn.fnamemodify(filepath, ":p")
 	end
 
-	-- Check if file exists
-	if vim.fn.filereadable(filepath) ~= 1 then
+	-- Check if file or directory exists (filereadable() rejects directories)
+	if vim.fn.filereadable(filepath) ~= 1 and vim.fn.isdirectory(filepath) ~= 1 then
 		vim.notify(
 			format_error(string.format("Cannot %s: File not found: %s", operation, filepath)),
 			vim.log.levels.ERROR
@@ -130,13 +130,6 @@ function M.handle_job_error(job_id, exit_code, cmd_description)
 	return true
 end
 
--- Wrap a function with error handling
-function M.wrap(func, error_prefix)
-	return function(...)
-		return M.protected_call(func, error_prefix, ...)
-	end
-end
-
 -- Create error buffer with detailed information
 function M.show_error_details(title, lines)
 	-- Create a new buffer
@@ -160,8 +153,12 @@ function M.show_error_details(title, lines)
 	vim.api.nvim_buf_set_lines(buf, 0, -1, false, content)
 	vim.bo[buf].modifiable = false
 
-	-- Open in a split
-	vim.cmd("split")
+	-- Open in a split (guarded: window limits can make :split fail)
+	local ok = pcall(vim.cmd, "split")
+	if not ok then
+		vim.notify("Cannot open error details window: no free window space", vim.log.levels.WARN)
+		return
+	end
 	vim.api.nvim_win_set_buf(0, buf)
 
 	-- Set up keybinding to close

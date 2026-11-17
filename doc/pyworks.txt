@@ -126,6 +126,8 @@ CELL SELECTION & NAVIGATION~
 *<leader>j]*  Next cell (Normal mode)
 *<leader>j[*  Previous cell (Normal mode)
 *<leader>jg*  Go to cell N (prompt) (Normal mode)
+*<leader>jm*  Format markdown cell with notebooks.md_formatter (Normal mode)
+	(<leader>jfm kept as an alias; <leader>jf toggles folding instantly)
 
 OUTPUT MANAGEMENT~
 
@@ -163,6 +165,8 @@ KERNEL MANAGEMENT~
 PACKAGE MANAGEMENT~
 
 *<leader>pi*  Install missing packages
+	Missing packages are tracked per project by default
+	(`packages.sync_scope = "project"`; "global" for one shared list).
 *<leader>ps*  Show package status
 
 ==============================================================================
@@ -235,6 +239,13 @@ CELL OPERATIONS~
     Run the current cell and move the cursor to the next cell
     (matches the Jupyter Shift+Enter behavior)
 
+*:PyworksFormatMarkdownCell*
+    Format the markdown cell under the cursor by piping its content
+    (marker lines excluded) through notebooks.md_formatter (default:
+    pandoc GFM roundtrip). Runs asynchronously; the buffer is only
+    rewritten when the formatter exits 0. See |pyworks-troubleshooting|
+    for formatter-missing hints. Bound to <leader>jfm by default.
+
 PACKAGE MANAGEMENT~
 
 *:PyworksSync*
@@ -292,6 +303,21 @@ All settings are optional. Here are the available options with their defaults:
       -- Cell delimiter pattern (e.g. "# COMMAND ----------" for Databricks)
       cell_marker = "# %%",
 
+      -- Notebook editing behavior (percent-format .ipynb buffers)
+      notebooks = {
+        lsp = "silence",            -- "silence": drop LSP diagnostics that
+                                    --   point inside markdown cells (keeps
+                                    --   completion) | "detach": detach LSP
+                                    --   clients from notebook buffers |
+                                    --   "attach": status quo
+        md_formatter = { "pandoc", "-f", "gfm", "-t", "markdown" },
+                                    -- argv for :PyworksFormatMarkdownCell
+        md_conceal = true,          -- hide the markdown "# " comment prefix
+                                    --   inline (cursor line always shows it)
+        md_fold_default = false,    -- open notebooks with markdown cells
+                                    --   folded (code cells stay expanded)
+      },
+
       -- Auto-detection
       auto_detect = true,  -- Automatically detect and setup on file open
 
@@ -328,8 +354,7 @@ For virtual environment detection, pyworks also respects environment variables:
 COMMON ISSUES~
 
 Q: :PyworksDiagnostics command not found
-A: Fixed in v3.0.3. Update to the latest version. The command was previously
-   registered in a module that wasn't loaded during startup.
+A: Fixed in v0.4.0. The command is now registered during setup().
 
 Q: "No visual selection found" error
 A: Use |<leader>jc| to select cell, then |<leader>jr| while in visual mode
@@ -356,6 +381,23 @@ A: This is an infinite recursion during notebook reload. Pyworks includes
 
 Q: Notebooks won't reload or appear stuck
 A: The reload guard may be stuck. Run |:PyworksResetReloadGuard| to reset.
+
+Q: Python LSP reports syntax errors / bogus warnings inside notebooks
+A: A raw (uncommented) markdown line — typed mid-session or in a
+   non-canonical percent file — is invalid Python and pylsp's whole-file
+   "invalid syntax" cascades into bogus warnings across real cells. By
+   default pyworks drops diagnostics pointing inside markdown cells
+   (notebooks.lsp = "silence") while keeping completion. Remaining
+   cell-order lint (E402, redefinitions) is a rule choice — ignore those
+   codes in your pylsp project config, or use notebooks.lsp = "detach".
+
+Q: Markdown cells don't look like markdown
+A: By default (notebooks.md_conceal = true) pyworks hides the jupytext "# "
+   comment prefix on markdown cell lines so they read as plain markdown; the
+   line your cursor is on always shows the real prefix. Set md_conceal =
+   false for raw editing. For richer styling (headings, bold), use
+   markview.nvim — it renders jupytext percent cells natively and composes
+   with pyworks.
 
 DEBUG MODE~
 

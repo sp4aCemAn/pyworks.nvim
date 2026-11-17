@@ -67,6 +67,7 @@ Point an agent here to answer "how does this plugin work" without reading
 | `core/recursion_guard.lua` | notebook :edit cascade breaker | notebooks |
 | `keymaps.lua` | user maps + Molten completion polling | execution |
 | `core/cell_engine.lua` | cell CRUD + run_cell | execution |
+| `core/cell_model.lua` | canonical percent cell model (Model A F1) | execution, notebooks |
 | `ui.lua` | cell numbers, folding, float windows | execution |
 | `core/cache.lua` | TTL cache | infrastructure |
 | `core/state.lua` | memory + persisted state | infrastructure |

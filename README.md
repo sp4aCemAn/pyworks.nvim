@@ -43,7 +43,7 @@ return {
 }
 ```
 
-Dependencies (`jeryldev/molten-nvim`, `jeryldev/image.nvim`) are declared in pyworks' `lazy.lua` and installed automatically.
+Dependencies (`benlubas/molten-nvim`, `3rd/image.nvim`) are declared in pyworks' `lazy.lua` and installed automatically.
 
 Pyworks automatically:
 - **Handles .ipynb files directly** - Uses jupytext CLI to convert notebooks to percent-style Python (`# %%`)
@@ -142,6 +142,7 @@ For inline plot/image display:
 | `<leader>jt` | Toggle cell type (code ↔ markdown) |
 | `<leader>jJ` | Merge with cell below      |
 | `<leader>js` | Split cell at cursor       |
+| `<leader>jm` | Format markdown cell (via `notebooks.md_formatter`; `<leader>jfm` alias) |
 
 ### Cell Folding & UI
 
@@ -194,6 +195,7 @@ For `skip_keymaps` users who prefer command-based workflows:
 | ---------------------------------- | ---------------------------------- |
 | `:PyworksNewPython [name]`         | Create Python file with cells      |
 | `:PyworksNewPythonNotebook [name]` | Create Python Jupyter notebook     |
+| `:PyworksFormatMarkdownCell`       | Format md cell under cursor (async) |
 
 ### Environment Management
 
@@ -254,6 +256,22 @@ require("pyworks").setup({
   -- Cell delimiter pattern (e.g. "# COMMAND ----------" for Databricks)
   cell_marker = "# %%",
 
+  -- Notebook editing behavior (percent-format .ipynb buffers)
+  notebooks = {
+    lsp = "silence",            -- "silence": drop LSP diagnostics that point
+                                -- inside markdown cells (keeps completion);
+                                -- "detach": detach all LSP clients from
+                                -- notebook buffers; "attach": status quo
+    md_formatter = { "pandoc", "-f", "gfm", "-t", "markdown" },
+                                -- argv used by :PyworksFormatMarkdownCell /
+                                -- <leader>jfm; any stdin->stdout formatter works
+    md_conceal = true,          -- hide the markdown "# " comment prefix inline
+                                -- (the cursor line always shows it, so editing
+                                -- stays honest)
+    md_fold_default = false,    -- open notebooks with markdown cells folded
+                                -- (code cells stay expanded)
+  },
+
   -- Auto-detection
   auto_detect = true,  -- Automatically detect and setup on file open
 
@@ -278,9 +296,9 @@ require("pyworks").setup({
 4. **Kernel initialization** - Auto-starts Python kernel
 5. **Ready to code** - Use keymaps to execute code immediately
 
-### Molten Fork
+### Molten
 
-Pyworks uses a maintained fork ([jeryldev/molten-nvim](https://github.com/jeryldev/molten-nvim)) that includes bug fixes for dict iteration safety and MoltenTick reentrancy, baked directly into the source. No runtime patching is needed.
+Pyworks uses upstream [molten-nvim](https://github.com/benlubas/molten-nvim). The dict-iteration-safety namespace lookup ("molten-extmarks" exact match) and reload reentrancy handling live on the pyworks side, so no fork or runtime patching is needed.
 
 ### Project Detection
 
@@ -321,6 +339,7 @@ plugin/pyworks.lua          Entry point: autocmds (FileType, BufWinEnter, Sessio
       ├── core/
       │   ├── cache.lua          TTL-based in-memory cache
       │   ├── cell_engine.lua    Cell navigation, manipulation, folding
+      │   ├── cell_model.lua     Canonical percent-buffer cell model
       │   ├── detector.lua       File routing, kernel auto-init
       │   ├── error_handler.lua  Protected calls, filepath validation
       │   ├── notifications.lua  Deduped user notifications
@@ -330,9 +349,13 @@ plugin/pyworks.lua          Entry point: autocmds (FileType, BufWinEnter, Sessio
       ├── languages/
       │   └── python.lua     Venv management, pip/uv commands, package ops
       ├── notebook/
-      │   └── jupytext.lua   .ipynb read/write via jupytext CLI
+      │   ├── jupytext.lua       .ipynb read/write via jupytext CLI
+      │   ├── lsp.lua            Notebook-aware LSP diagnostics (silence/detach)
+      │   ├── md_view.lua        Inline markdown concealment (matchadd ranges)
+      │   └── percent_md.lua     jupytext percent markdown comment codec
       └── commands/
-          └── create.lua     :PyworksNewPython, :PyworksNewPythonNotebook
+          ├── create.lua         :PyworksNewPython, :PyworksNewPythonNotebook
+          └── format_cell.lua    :PyworksFormatMarkdownCell
 ```
 
 ### Startup Flow
@@ -348,7 +371,7 @@ plugin/pyworks.lua          Entry point: autocmds (FileType, BufWinEnter, Sessio
 ### Common Issues
 
 **Q: `:PyworksDiagnostics` command not found**
-A: Fixed in v3.0.3. Update to the latest version. The command was previously registered in a module that wasn't loaded during startup.
+A: Fixed in v0.4.0. The command is now registered during setup().
 
 **Q: "No kernel initialized" warning when using `<leader>jj`**
 A: Press `<leader>jl` first to auto-initialize the kernel for the current file type.
@@ -364,6 +387,23 @@ A: Don't use `plt.show()`. Just create the plot and let Molten capture it.
 
 **Q: Notebook appears blank after session restore**
 A: Run `:PyworksReloadNotebook` to reload with jupytext conversion.
+
+**Q: My Python LSP (pylsp/pyright) reports syntax errors and bogus import/undefined warnings inside notebooks**
+A: jupytext percent scripts store markdown cell bodies as *raw text*, which is not valid Python — servers choke on those lines and the failed parse cascades into the rest of the file. By default pyworks silences it: `notebooks.lsp = "silence"` drops diagnostics pointing inside markdown cells while keeping completion and hover in code cells. What may remain is cell-order lint (redefinitions/imports-not-at-top — inherent to one sequential file); for pylsp tune the rules in your project config:
+
+```toml
+# .pyls.toml (or pyproject.toml [tool.pylsp])
+[pylsp.plugins.pycodestyle]
+ignore = ["E402", "E501"]
+```
+
+Escape hatches: `notebooks.lsp = "detach"` (no LSP clients at all on notebook buffers) or `"attach"` (raw status quo).
+
+**Q: Markdown cells don't look like markdown**
+A: By default (`notebooks.md_conceal = true`) pyworks hides the jupytext `# ` comment prefix on markdown cell lines, so they read as plain markdown; the line your cursor sits on always shows the real prefix, and `md_conceal = false` restores raw editing. For richer styling (headings, bold, inline images) use [markview.nvim](https://github.com/OXY2CREATIONS/markview.nvim) — it renders jupytext percent cells natively and composes cleanly with pyworks.
+
+**Q: `<leader>jfm` warns that the markdown formatter is missing**
+A: The default formatter is `pandoc`. Install it, or point `notebooks.md_formatter` at any stdin→stdout markdown formatter, e.g. `{ "prettier", "--parser", "markdown" }`.
 
 **Q: E132 "Function call depth" error or notebook won't reload**
 A: Run `:PyworksResetReloadGuard` to reset the reload guard, then retry.
@@ -408,7 +448,7 @@ MIT License - see [LICENSE](LICENSE) for details
 
 ## Acknowledgments
 
-- [molten-nvim](https://github.com/jeryldev/molten-nvim) - Jupyter integration for Neovim (fork of [benlubas/molten-nvim](https://github.com/benlubas/molten-nvim) with bug fixes)
-- [image.nvim](https://github.com/jeryldev/image.nvim) - Inline image rendering (fork of [3rd/image.nvim](https://github.com/3rd/image.nvim))
+- [molten-nvim](https://github.com/benlubas/molten-nvim) - Jupyter integration for Neovim
+- [image.nvim](https://github.com/3rd/image.nvim) - Inline image rendering
 - [jupytext](https://github.com/mwouts/jupytext) - Jupyter notebook conversion CLI
 - [uv](https://github.com/astral-sh/uv) - Lightning-fast Python package management

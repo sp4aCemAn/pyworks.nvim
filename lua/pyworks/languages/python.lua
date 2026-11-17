@@ -151,9 +151,11 @@ function M.venv_uses_uv(filepath)
 		end
 	end
 
-	-- Tertiary check: Check if pip is missing (UV venvs don't have pip by default)
+	-- Tertiary check: pip missing AND uv actually available. "pip missing"
+	-- alone misclassifies a pip venv whose pip was removed/upgraded away —
+	-- routing its installs through uv then fails confusingly.
 	local pip_path = venv_path .. "/bin/pip"
-	if vim.fn.executable(pip_path) == 0 then
+	if vim.fn.executable(pip_path) == 0 and vim.fn.executable("uv") == 1 then
 		-- No pip in venv is a strong indicator of UV
 		return true
 	end
@@ -268,7 +270,8 @@ function M.create_venv(filepath)
 	return success
 end
 
--- Install essential packages
+-- Install essential packages (async: probes and installation never block
+-- the UI thread)
 function M.install_essentials(filepath)
 	filepath = filepath or get_current_filepath()
 
@@ -285,92 +288,104 @@ function M.install_essentials(filepath)
 		end
 	end
 
-	-- Check if essentials are already installed
-	local missing_essentials = {}
-	for _, pkg in ipairs(config.essentials) do
-		if not M.is_package_installed(pkg, filepath) then
-			table.insert(missing_essentials, pkg)
-		end
-	end
-
-	if #missing_essentials == 0 then
-		return true
-	end
-
-	-- Mark as installing to prevent duplicate calls
+	-- Mark as in-flight for the whole probe+install window so concurrent
+	-- triggers don't duplicate work
 	state.set(install_key, true)
 
-	-- Get the correct package manager command
-	local package_manager = M.get_package_manager(filepath)
-
-	-- Check if we're using uv or pip
-	local is_uv = package_manager:match("^uv")
-
-	if is_uv then
-		-- For uv, check that uv is available
-		if vim.fn.executable("uv") == 0 then
-			notifications.notify_error("uv not found but venv was created with uv")
-			return false
+	-- Probe essentials sequentially (async import checks); then install
+	local function check_missing(i, missing, done)
+		local pkgs = config.essentials
+		if i > #pkgs then
+			done(missing)
+			return
 		end
-	else
-		-- For pip, check that pip exists in venv
-		local pip_path = M.get_pip_path(filepath)
-		if not pip_path or vim.fn.executable(pip_path) == 0 then
-			notifications.notify_error("pip not found in virtual environment")
-			return false
-		end
-	end
-
-	-- Upgrade pip if using pip (not needed for uv)
-	if not is_uv then
-		pcall(vim.system, { package_manager, "install", "--upgrade", "pip" }, { text = true })
-	end
-
-	local cmd = build_pip_command("install", missing_essentials, filepath)
-
-	if notifications.get_config().debug_mode then
-		notifications.notify("[Debug] Running: " .. table.concat(cmd, " "), vim.log.levels.DEBUG)
-	end
-
-	if not project_dir or vim.fn.isdirectory(project_dir) ~= 1 then
-		notifications.notify_error("Invalid project directory for essentials: " .. (project_dir or "nil"))
-		return false
-	end
-
-	local ok, sys_obj = pcall(vim.system, cmd, {
-		text = true,
-		cwd = project_dir,
-	}, function(obj)
-		vim.schedule(function()
-			-- Clear the installing flag
-			state.set(install_key, nil)
-
-			if obj.code == 0 then
-				for _, pkg in ipairs(missing_essentials) do
-					state.mark_package_installed("python", pkg)
-				end
-				cache.invalidate("installed_packages_python")
-			else
-				local error_msg = "Failed to install essential packages."
-				local filtered_errors = filter_pip_stderr(obj.stderr)
-				if #filtered_errors > 0 then
-					error_msg = error_msg .. "\nError: " .. table.concat(filtered_errors, "\n")
-				end
-				notifications.notify_error(error_msg)
+		M.is_package_installed_async(pkgs[i], filepath, function(installed)
+			if not installed then
+				table.insert(missing, pkgs[i])
 			end
+			check_missing(i + 1, missing, done)
 		end)
-	end)
-
-	if not ok then
-		state.set(install_key, nil) -- Clear the installing flag
-		notifications.notify_error("Failed to start essential packages installation: " .. tostring(sys_obj))
-		return false
 	end
+
+	check_missing(1, {}, function(missing_essentials)
+		if #missing_essentials == 0 then
+			state.set(install_key, nil)
+			-- Nothing was missing: the environment genuinely is ready
+			notifications.notify_environment_ready("python")
+			return
+		end
+
+		-- Get the correct package manager command
+		local package_manager = M.get_package_manager(filepath)
+
+		-- Check if we're using uv or pip
+		local is_uv = package_manager:match("^uv")
+
+		if is_uv then
+			-- For uv, check that uv is available
+			if vim.fn.executable("uv") == 0 then
+				state.set(install_key, nil)
+				notifications.notify_error("uv not found but venv was created with uv")
+				return
+			end
+		else
+			-- For pip, check that pip exists in venv
+			local pip_path = M.get_pip_path(filepath)
+			if not pip_path or vim.fn.executable(pip_path) == 0 then
+				state.set(install_key, nil)
+				notifications.notify_error("pip not found in virtual environment")
+				return
+			end
+		end
+
+		local cmd = build_pip_command("install", missing_essentials, filepath)
+
+		if notifications.get_config().debug_mode then
+			notifications.notify("[Debug] Running: " .. table.concat(cmd, " "), vim.log.levels.DEBUG)
+		end
+
+		if not project_dir or vim.fn.isdirectory(project_dir) ~= 1 then
+			state.set(install_key, nil)
+			notifications.notify_error("Invalid project directory for essentials: " .. (project_dir or "nil"))
+			return
+		end
+
+		local ok, sys_obj = pcall(vim.system, cmd, {
+			text = true,
+			cwd = project_dir,
+		}, function(obj)
+			vim.schedule(function()
+				-- Clear the installing flag
+				state.set(install_key, nil)
+
+				if obj.code == 0 then
+					for _, pkg in ipairs(missing_essentials) do
+						state.mark_package_installed("python", pkg)
+					end
+					cache.invalidate_pattern("^installed_packages_")
+				else
+					local error_msg = "Failed to install essential packages."
+					local filtered_errors = filter_pip_stderr(obj.stderr)
+					if #filtered_errors > 0 then
+						error_msg = error_msg .. "\nError: " .. table.concat(filtered_errors, "\n")
+					end
+					notifications.notify_error(error_msg)
+				end
+			end)
+		end)
+
+		if not ok then
+			state.set(install_key, nil) -- Clear the installing flag
+			notifications.notify_error("Failed to start essential packages installation: " .. tostring(sys_obj))
+		end
+	end)
 
 	return true
 end
 
 -- Check if a package is installed (with timeout to prevent UI blocking)
+-- SYNC: intended for explicit user-invoked contexts (:checkhealth). Library
+-- code should use is_package_installed_async.
 function M.is_package_installed(package_name, filepath)
 	filepath = filepath or get_current_filepath()
 	local python_path = M.get_python_path(filepath)
@@ -390,39 +405,65 @@ function M.is_package_installed(package_name, filepath)
 	return success
 end
 
--- Get list of installed packages (with timeout to prevent UI blocking)
-function M.get_installed_packages(filepath)
+-- Async variant of is_package_installed; the callback receives true/false.
+function M.is_package_installed_async(package_name, filepath, callback)
+	filepath = filepath or get_current_filepath()
+
+	-- Use centralized reverse mapping to get import name from package name
+	local import_name = get_packages().map_package_to_import(package_name, "python")
+	if not import_name or not import_name:match("^[%w_%.]+$") then
+		callback(false)
+		return
+	end
+
+	local python_path = M.get_python_path(filepath)
+	if not python_path then
+		callback(false)
+		return
+	end
+
+	utils.async_system_call({ python_path, "-c", "import " .. import_name }, function(success)
+		callback(success)
+	end, { timeout = IMPORT_CHECK_TIMEOUT_MS })
+end
+
+-- Get list of installed packages (async; the callback receives a lowercase
+-- name array). The UI thread never waits on pip/uv.
+function M.get_installed_packages(filepath, callback)
 	filepath = filepath or get_current_filepath()
 	if not M.has_venv(filepath) then
-		return {}
+		callback({})
+		return
 	end
 
 	-- UV venv but no UV available - can't list packages
 	if M.venv_uses_uv(filepath) and vim.fn.executable("uv") == 0 then
-		return {}
+		callback({})
+		return
 	end
 
 	-- Regular pip venv without pip - can't list packages
 	if not M.venv_uses_uv(filepath) and not M.get_pip_path(filepath) then
-		return {}
+		callback({})
+		return
 	end
 
 	local cmd = build_pip_command("list", nil, filepath, { format = "freeze" })
-	local success, output, _ = utils.system_with_timeout(cmd, PIP_LIST_TIMEOUT_MS)
-
-	if not success then
-		return {}
-	end
-
-	local installed = {}
-	for line in output:gmatch("[^\r\n]+") do
-		local pkg = line:match("^([^=]+)")
-		if pkg then
-			table.insert(installed, pkg:lower())
+	utils.async_system_call(cmd, function(success, output)
+		if not success then
+			callback({})
+			return
 		end
-	end
 
-	return installed
+		local installed = {}
+		for line in output:gmatch("[^\r\n]+") do
+			local pkg = line:match("^([^=]+)")
+			if pkg then
+				table.insert(installed, pkg:lower())
+			end
+		end
+		callback(installed)
+	end, { timeout = PIP_LIST_TIMEOUT_MS })
 end
 
 -- Install packages
@@ -433,6 +474,18 @@ end
 function M.install_packages(package_list, filepath, opts)
 	vim.validate({ opts = { opts, "table", true } })
 	opts = opts or {}
+
+	-- Charset validation FIRST (before any venv work): rejects pip option
+	-- smuggling ("--index-url") and malformed names outright, on every path.
+	local valid_list, invalid_list = get_packages().validate_package_names(package_list)
+	if #invalid_list > 0 then
+		notifications.notify_error("Rejected invalid package name(s): " .. table.concat(invalid_list, ", "))
+	end
+	package_list = valid_list
+	if #package_list == 0 then
+		return false
+	end
+
 	filepath = filepath or get_current_filepath()
 	if not M.has_venv(filepath) then
 		if not M.create_venv(filepath) then
@@ -526,7 +579,7 @@ function M.install_packages(package_list, filepath, opts)
 				for _, pkg in ipairs(package_list) do
 					state.mark_package_installed("python", pkg)
 				end
-				cache.invalidate("installed_packages_python")
+				cache.invalidate_pattern("^installed_packages_")
 				cache.invalidate_pattern("imports_")
 			else
 				notifications.progress_finish("python_packages")
@@ -542,13 +595,19 @@ function M.install_packages(package_list, filepath, opts)
 					table.insert(all_output, "[STDERR] " .. line)
 				end
 
-				-- Create a detailed error buffer
+				-- Create a detailed error buffer (unique name: a second
+				-- failure while one is open would raise E95)
 				vim.cmd("new")
 				vim.bo.buftype = "nofile"
 				vim.bo.bufhidden = "wipe"
 				vim.bo.swapfile = false
 				vim.bo.filetype = "text"
-				vim.api.nvim_buf_set_name(0, "Package Installation Error")
+				for i = 0, 99 do
+					local name = "Package Installation Error" .. (i == 0 and "" or (" (" .. i .. ")"))
+					if pcall(vim.api.nvim_buf_set_name, 0, name) then
+						break
+					end
+				end
 
 				local error_report = {
 					"PACKAGE INSTALLATION FAILED",
@@ -613,6 +672,21 @@ function M.install_packages(package_list, filepath, opts)
 	return true
 end
 
+-- Missing-packages state key honoring packages.sync_scope ("project":
+-- per-project lists, the Colab-like default; "global": one shared list).
+-- Defined BEFORE its callers (handle_file / install_missing_packages) —
+-- a local defined below them resolves as a global nil at call sites.
+local function missing_packages_key(filepath)
+	local ok, pyworks = pcall(require, "pyworks")
+	local cfg = ok and pyworks.get_config and pyworks.get_config() or nil
+	local scope = (cfg and cfg.packages and cfg.packages.sync_scope) or "project"
+	if scope == "project" then
+		local project_dir = utils.get_project_paths(filepath)
+		return state.KEYS.MISSING_PACKAGES .. "python_" .. (project_dir or "global")
+	end
+	return state.KEYS.MISSING_PACKAGES .. "python"
+end
+
 -- Ensure Python environment is ready
 function M.ensure_environment(filepath)
 	-- Use provided filepath or fall back to current buffer
@@ -632,13 +706,13 @@ function M.ensure_environment(filepath)
 		end
 	end
 
-	-- Step 2: Install essentials
+	-- Step 2: Install essentials (async). The "environment ready" notice
+	-- comes from install_essentials once its probe confirms nothing is
+	-- missing — notifying here would claim ready even when installation
+	-- never started or failed.
 	if config.auto_install_essentials then
 		M.install_essentials(filepath)
 	end
-
-	-- Step 3: Notify environment ready
-	notifications.notify_environment_ready("python")
 
 	return true
 end
@@ -656,20 +730,18 @@ function M.handle_file(filepath, opts)
 	-- Ensure environment for this specific file's project
 	M.ensure_environment(filepath)
 
-	-- Detect missing packages (async to avoid blocking file open)
-	vim.defer_fn(function()
-		local missing = get_packages().detect_missing_packages(filepath, "python")
-
+	-- Detect missing packages (async: pip/uv never runs on the UI thread)
+	get_packages().detect_missing_packages(filepath, "python", function(missing)
 		if #missing > 0 then
 			notifications.notify_missing_packages(missing, "python")
 
 			-- Store missing packages for leader-pi command
-			state.set(state.KEYS.MISSING_PACKAGES .. "python", missing)
+			state.set(missing_packages_key(filepath), missing)
 		else
 			-- Clear any previous missing packages
-			state.remove(state.KEYS.MISSING_PACKAGES .. "python")
+			state.remove(missing_packages_key(filepath))
 		end
-	end, 100) -- Small delay to avoid blocking file open
+	end)
 
 	-- If it's a notebook, ensure jupytext
 	if opts.is_notebook then
@@ -680,7 +752,7 @@ end
 
 -- Install missing packages command
 function M.install_missing_packages()
-	local missing = state.get(state.KEYS.MISSING_PACKAGES .. "python") or {}
+	local missing = state.get(missing_packages_key(get_current_filepath())) or {}
 
 	if #missing == 0 then
 		notifications.notify("No missing packages detected", vim.log.levels.INFO)
@@ -711,11 +783,8 @@ end
 
 -- Install specific Python packages (user command)
 function M.install_python_packages(packages_str)
-	-- Get current file context
+	-- Get current file context (nil when no file buffer)
 	local filepath = get_current_filepath()
-	if filepath == "" then
-		filepath = nil
-	end
 
 	-- Parse packages string (space or comma separated)
 	local pkg_list = {}
@@ -754,11 +823,8 @@ end
 
 -- Uninstall Python packages (user command)
 function M.uninstall_python_packages(packages_str)
-	-- Get current file context
+	-- Get current file context (nil when no file buffer)
 	local filepath = get_current_filepath()
-	if filepath == "" then
-		filepath = nil
-	end
 
 	-- Check venv exists
 	if not M.has_venv(filepath) then
@@ -778,6 +844,16 @@ function M.uninstall_python_packages(packages_str)
 		return
 	end
 
+	-- Charset validation: rejects pip option smuggling and malformed names
+	local valid_list, invalid_list = get_packages().validate_package_names(pkg_list)
+	if #invalid_list > 0 then
+		notifications.notify_error("Rejected invalid package name(s): " .. table.concat(invalid_list, ", "))
+	end
+	pkg_list = valid_list
+	if #pkg_list == 0 then
+		return
+	end
+
 	local project_dir = utils.get_project_paths(filepath)
 	local cmd = build_pip_command("uninstall", pkg_list, filepath, { yes = true })
 
@@ -793,7 +869,7 @@ function M.uninstall_python_packages(packages_str)
 		vim.schedule(function()
 			if obj.code == 0 then
 				notifications.notify("Packages uninstalled successfully", vim.log.levels.INFO)
-				cache.invalidate("installed_packages_python")
+				cache.invalidate_pattern("^installed_packages_")
 			else
 				notifications.notify_error("Failed to uninstall some packages")
 			end
@@ -852,49 +928,6 @@ function M.list_python_packages()
 	else
 		notifications.notify_error("Failed to list packages")
 	end
-end
-
--- Check Python version compatibility (with timeout)
-function M.check_compatibility(package_name, filepath)
-	filepath = filepath or get_current_filepath()
-	local python_path = M.get_python_path(filepath) or "python3"
-
-	local cmd = { python_path, "--version" }
-	local success, version_output, _ = utils.system_with_timeout(cmd, IMPORT_CHECK_TIMEOUT_MS)
-	if not success then
-		return nil
-	end
-	local major, minor = version_output:match("Python (%d+)%.(%d+)")
-
-	if not major then
-		return nil
-	end
-
-	local py_version = tonumber(major) + tonumber(minor) / 10
-
-	-- Check known compatibility issues
-	local compatibility_issues = {
-		tensorflow = {
-			max_version = 3.11,
-			message = "TensorFlow may not be compatible with Python 3.12+",
-		},
-		numpy = {
-			min_version = 3.8,
-			message = "NumPy requires Python 3.8+",
-		},
-	}
-
-	local issue = compatibility_issues[package_name:lower()]
-	if issue then
-		if issue.max_version and py_version > issue.max_version then
-			return issue.message
-		end
-		if issue.min_version and py_version < issue.min_version then
-			return issue.message
-		end
-	end
-
-	return nil
 end
 
 return M

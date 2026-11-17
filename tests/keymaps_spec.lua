@@ -429,6 +429,246 @@ describe("keymaps", function()
 		end)
 	end)
 
+	describe("run-all via cell model (F3)", function()
+		-- Drives the real <leader>jR callback with a recording MoltenEvaluateRange
+		-- stub that stamps "Out[N]: ✓ Done" extmarks (completing each cell
+		-- immediately), asserting every code cell executes EXACTLY once over its
+		-- model range and markdown cells are skipped by TYPE — the pre-F3
+		-- cursor-relative search ("bnW" missing the "c" flag) shifted ranges by
+		-- one cell when the cursor sat on a marker line (double execution).
+		local original_notify
+		local notes
+
+		local function stub_molten_eval()
+			-- Mirrors real Molten timing: the range is accepted immediately, the
+			-- "Out[N]: ✓ Done" extmark lands asynchronously (a kernel round-trip
+			-- later); a synchronous stamp would poison wait_for_cell_completion's
+			-- baseline (it snapshots the highest completed Out before polling).
+			-- [==[ because the vimscript dict literal contains ]] which would
+			-- close a plain [[ ]] long string.
+			vim.cmd([==[
+				let g:_test_run_all_eval = []
+				let g:_test_run_all_queue = []
+				let g:_test_run_all_ns = -1
+				function! MoltenEvaluateRange(start_line, end_line) abort
+					call add(g:_test_run_all_eval, [a:start_line, a:end_line])
+					call add(g:_test_run_all_queue, a:end_line)
+					call timer_start(40, 'MoltenEmitOut')
+				endfunction
+				function! MoltenEmitOut(_timer) abort
+					if g:_test_run_all_ns >= 0 && !empty(g:_test_run_all_queue)
+						let l:line = remove(g:_test_run_all_queue, 0)
+						let l:n = len(g:_test_run_all_eval) - len(g:_test_run_all_queue)
+						call nvim_buf_set_extmark(0, g:_test_run_all_ns, l:line - 1, 0,
+							\ {'virt_text': [['Out[' . l:n . ']: ✓ Done', 'Comment']]})
+					endif
+				endfunction
+			]==])
+		end
+
+		local function unstub_molten_eval()
+			pcall(vim.cmd, "delfunction MoltenEvaluateRange")
+			pcall(vim.cmd, "delfunction MoltenEmitOut")
+			vim.g._test_run_all_eval = nil
+			vim.g._test_run_all_queue = nil
+			vim.g._test_run_all_ns = nil
+		end
+
+		before_each(function()
+			notes = {}
+			original_notify = vim.notify
+			vim.notify = function(msg, _level)
+				table.insert(notes, tostring(msg))
+			end
+			if vim.fn.exists(":MoltenInit") == 0 then
+				vim.api.nvim_create_user_command(
+					"MoltenInit",
+					function() end,
+					{ nargs = "?", desc = "pyworks test stub" }
+				)
+			end
+			stub_molten_eval()
+			vim.g._test_run_all_ns = vim.api.nvim_create_namespace("molten-extmarks")
+			keymaps._invalidate_molten_ns_cache()
+		end)
+
+		after_each(function()
+			vim.notify = original_notify
+			unstub_molten_eval()
+			pcall(vim.api.nvim_del_user_command, "MoltenInit")
+		end)
+
+		local function run_all_from(cursor_line, lines)
+			-- Fresh notification list per run: a previous run's "All cells
+			-- executed" note must not short-circuit this run's completion wait
+			notes = {}
+			vim.api.nvim_buf_set_lines(test_bufnr, 0, -1, false, lines)
+			vim.b[test_bufnr].molten_initialized = true
+			vim.api.nvim_win_set_cursor(0, { cursor_line, 0 })
+			-- Fresh completion state per run (extmarks are per-buffer, but the
+			-- second run in a test must not inherit Out[N] from the first)
+			local ns = vim.api.nvim_create_namespace("molten-extmarks")
+			vim.api.nvim_buf_clear_namespace(test_bufnr, ns, 0, -1)
+			vim.g._test_run_all_eval = {}
+			vim.g._test_run_all_queue = {}
+			keymaps._invalidate_molten_ns_cache()
+			keymaps.setup_buffer_keymaps()
+
+			local callback
+			for _, map in ipairs(vim.api.nvim_buf_get_keymap(test_bufnr, "n")) do
+				if map.lhs and map.lhs:match("jR$") then
+					callback = map.callback
+				end
+			end
+			assert.is_function(callback, "<leader>jR must be mapped when Molten is available")
+
+			callback()
+			local done = vim.wait(8000, function()
+				for _, note in ipairs(notes) do
+					if note:match("All cells executed") then
+						return true
+					end
+				end
+				return false
+			end, 25)
+			assert.is_true(done, "run-all did not finish in time")
+			return vim.g._test_run_all_eval
+		end
+
+		it("executes each code cell exactly once and skips markdown by type", function()
+			local calls = run_all_from(1, {
+				"# %%",
+				"a = 1",
+				"# %% [markdown]",
+				"# note",
+				"# %%",
+				"b = 2",
+			})
+			assert.same({ { 2, 2 }, { 6, 6 } }, calls)
+		end)
+
+		it("is cursor-position independent (bnW double-execution regression)", function()
+			local lines = {
+				"# %%",
+				"a = 1",
+				"# %% [markdown]",
+				"# note",
+				"# %%",
+				"b = 2",
+				"# %%",
+				"c = 3",
+			}
+			local from_top = run_all_from(1, lines)
+			-- Cursor ON the second marker line: the old "bnW" search found the
+			-- PREVIOUS marker, shifting every executed range by one cell.
+			local from_marker = run_all_from(3, lines)
+			assert.same(from_top, from_marker)
+			assert.same({ { 2, 2 }, { 6, 6 }, { 8, 8 } }, from_marker)
+		end)
+
+		it("skips empty and trailing-marker cells without executing anything", function()
+			local calls = run_all_from(1, {
+				"# %%",
+				"only = 1",
+				"# %%",
+				"# %%",
+			})
+			assert.same({ { 2, 2 } }, calls)
+		end)
+
+		it("refuses a second <leader>jR while a run is in progress (no doubled execution)", function()
+			local lines = { "# %%", "a = 1", "# %%", "b = 2" }
+			vim.api.nvim_buf_set_lines(test_bufnr, 0, -1, false, lines)
+			vim.b[test_bufnr].molten_initialized = true
+			vim.api.nvim_win_set_cursor(0, { 1, 0 })
+			local ns = vim.api.nvim_create_namespace("molten-extmarks")
+			vim.api.nvim_buf_clear_namespace(test_bufnr, ns, 0, -1)
+			vim.g._test_run_all_eval = {}
+			vim.g._test_run_all_queue = {}
+			keymaps._invalidate_molten_ns_cache()
+			keymaps.setup_buffer_keymaps()
+
+			local callback
+			for _, map in ipairs(vim.api.nvim_buf_get_keymap(test_bufnr, "n")) do
+				if map.lhs and map.lhs:match("jR$") then
+					callback = map.callback
+				end
+			end
+			assert.is_function(callback, "<leader>jR must be mapped when Molten is available")
+
+			callback()
+			callback() -- second press mid-run: must be refused, not interleaved
+			assert.is_true(
+				vim.wait(500, function()
+					for _, note in ipairs(notes) do
+						if note:match("already in progress") then
+							return true
+						end
+					end
+					return false
+				end),
+				"second run-all press must be refused with a notice"
+			)
+
+			local done = vim.wait(8000, function()
+				for _, note in ipairs(notes) do
+					if note:match("All cells executed") then
+						return true
+					end
+				end
+				return false
+			end, 25)
+			assert.is_true(done, "the (single) run must still finish")
+			assert.same({ { 2, 2 }, { 4, 4 } }, vim.g._test_run_all_eval)
+		end)
+
+		it("aborts when the buffer is edited mid-run (stale snapshot)", function()
+			local lines = { "# %%", "a = 1", "# %%", "b = 2" }
+			vim.api.nvim_buf_set_lines(test_bufnr, 0, -1, false, lines)
+			vim.b[test_bufnr].molten_initialized = true
+			vim.api.nvim_win_set_cursor(0, { 1, 0 })
+			local ns = vim.api.nvim_create_namespace("molten-extmarks")
+			vim.api.nvim_buf_clear_namespace(test_bufnr, ns, 0, -1)
+			vim.g._test_run_all_eval = {}
+			vim.g._test_run_all_queue = {}
+			keymaps._invalidate_molten_ns_cache()
+			keymaps.setup_buffer_keymaps()
+
+			local callback
+			for _, map in ipairs(vim.api.nvim_buf_get_keymap(test_bufnr, "n")) do
+				if map.lhs and map.lhs:match("jR$") then
+					callback = map.callback
+				end
+			end
+			assert.is_function(callback, "<leader>jR must be mapped when Molten is available")
+
+			callback()
+			assert.is_true(
+				vim.wait(2000, function()
+					return #vim.g._test_run_all_eval >= 1
+				end, 10),
+				"first cell should dispatch"
+			)
+
+			-- Delete the second cell's marker while the run is between cells:
+			-- every remaining snapshot range is now stale and must not execute.
+			vim.api.nvim_buf_set_lines(test_bufnr, 2, 3, false, {})
+
+			assert.is_true(
+				vim.wait(8000, function()
+					for _, note in ipairs(notes) do
+						if note:match("Run all aborted") then
+							return true
+						end
+					end
+					return false
+				end, 25),
+				"run-all must abort on mid-run layout change"
+			)
+			assert.same({ { 2, 2 } }, vim.g._test_run_all_eval)
+		end)
+	end)
+
 	describe("event suppression", function()
 		it("should preserve eventignore after suppression", function()
 			local original = vim.o.eventignore

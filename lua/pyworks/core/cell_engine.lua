@@ -15,10 +15,25 @@ function M.get_cell_pattern()
 	return "^" .. vim.pesc(config.cell_marker)
 end
 
+-- Raw configured marker text (e.g. "# %%"), for callers building their own
+-- regexes around the marker itself.
+function M.get_marker()
+	vim.validate({})
+	return config.cell_marker
+end
+
+-- Escape characters that are special WITHOUT a backslash in vim's default
+-- magic regex mode (`. * [ ^ $ ~`). Everything else in a typical marker
+-- (`%`, `-`, `(`, `)`, `|`, `#`) is literal in magic mode, so it must stay
+-- untouched — e.g. `%` cannot be written as `\%` (that leads-in an atom).
+local function vim_regex_escape(s)
+	return (s:gsub("\\", "\\\\"):gsub("[%^%$%.%*%[~]", "\\%0"))
+end
+
 -- Vim-regex pattern for use with vim.fn.search(). Exported so keymaps.lua
 -- can use the configured marker instead of hardcoding "^# %%".
 function M.vim_search_pattern()
-	return "^" .. config.cell_marker
+	return "^" .. vim_regex_escape(config.cell_marker)
 end
 
 -- Keep the local alias for internal use.
@@ -26,70 +41,54 @@ local function vim_search_pattern()
 	return M.vim_search_pattern()
 end
 
+-- Content range of the cell under the cursor (markers excluded; cursor ON a
+-- marker line selects the cell it opens). nil, nil for empty cells — a cell
+-- whose content is blank-only counts as empty (running it would evaluate
+-- whitespace).
+-- Call-through to the canonical cell model (F3).
 function M.find_cell_boundaries()
-	local pattern = vim_search_pattern()
-	local cell_start = vim.fn.search(pattern, "bcnW")
-	local cell_end = vim.fn.search(pattern, "nW")
-
-	local start_line, end_line
-
-	if cell_start == 0 and cell_end == 0 then
-		start_line = 1
-		end_line = vim.fn.line("$")
-	elseif cell_start == 0 then
-		start_line = 1
-		end_line = cell_end - 1
-	elseif cell_end == 0 then
-		start_line = cell_start + 1
-		end_line = vim.fn.line("$")
-	else
-		start_line = cell_start + 1
-		end_line = cell_end - 1
-	end
-
-	if start_line > end_line then
+	local cell = require("pyworks.core.cell_model").cell_at(0)
+	if not cell or cell.start_line > cell.end_line then
 		return nil, nil
 	end
-
-	return start_line, end_line
+	local lines = vim.api.nvim_buf_get_lines(0, cell.start_line - 1, cell.end_line, false)
+	for _, line in ipairs(lines) do
+		if line:match("%S") then
+			return cell.start_line, cell.end_line
+		end
+	end
+	return nil, nil
 end
 
 function M.count_cells(bufnr)
 	vim.validate({ bufnr = { bufnr, "number", true } })
-	bufnr = bufnr or vim.api.nvim_get_current_buf()
-	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-	local pattern = M.get_cell_pattern()
-	local count = 0
-	for _, line in ipairs(lines) do
-		if line:match(pattern) then
-			count = count + 1
-		end
-	end
-	return count
+	return #require("pyworks.core.cell_model").markers(bufnr)
 end
 
 function M.get_cell_positions(bufnr)
 	vim.validate({ bufnr = { bufnr, "number", true } })
-	bufnr = bufnr or vim.api.nvim_get_current_buf()
-	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-	local pattern = M.get_cell_pattern()
 	local positions = {}
-	for i, line in ipairs(lines) do
-		if line:match(pattern) then
-			table.insert(positions, i)
-		end
+	for _, cell in ipairs(require("pyworks.core.cell_model").markers(bufnr)) do
+		table.insert(positions, cell.marker_line)
 	end
 	return positions
 end
 
+-- Line ranges of markdown cell *content*: marker line and the following
+-- marker are excluded; the final cell extends to end of buffer. Empty cells
+-- produce no region. Delegated to core/cell_model.markdown_regions (the
+-- canonical cell model, F1); kept as the cell_engine API for existing
+-- consumers.
+function M.get_markdown_regions(bufnr)
+	vim.validate({ bufnr = { bufnr, "number", true } })
+	return require("pyworks.core.cell_model").markdown_regions(bufnr)
+end
+
+-- True when the cursor is inside (or on the marker of) a markdown cell.
+-- Type comes from the cell model (F3) — no cursor-position marker search.
 function M.is_markdown_cell()
-	local pattern = vim_search_pattern()
-	local cell_start = vim.fn.search(pattern, "bcnW")
-	if cell_start == 0 then
-		return false
-	end
-	local line = vim.fn.getline(cell_start)
-	return line:match("%[markdown%]") ~= nil
+	local cell = require("pyworks.core.cell_model").cell_at(0)
+	return cell ~= nil and cell.type == "markdown"
 end
 
 function M.next_cell()
@@ -119,7 +118,20 @@ function M.prev_cell()
 	return true
 end
 
+-- Refuse to mutate a nomodifiable buffer: mapped keymaps would otherwise
+-- raise raw errors from deep inside nvim_buf_set_lines/append.
+local function ensure_modifiable()
+	if not vim.bo.modifiable then
+		vim.notify("Buffer is not modifiable", vim.log.levels.WARN)
+		return false
+	end
+	return true
+end
+
 function M.insert_cell_above()
+	if not ensure_modifiable() then
+		return
+	end
 	local pattern = vim_search_pattern()
 	local current_marker = vim.fn.search(pattern, "bcnW")
 	local insert_line
@@ -133,6 +145,9 @@ function M.insert_cell_above()
 end
 
 function M.insert_cell_below()
+	if not ensure_modifiable() then
+		return
+	end
 	local pattern = vim_search_pattern()
 	local next_marker = vim.fn.search(pattern, "nW")
 	local insert_line
@@ -146,6 +161,9 @@ function M.insert_cell_below()
 end
 
 function M.insert_markdown_above()
+	if not ensure_modifiable() then
+		return
+	end
 	local pattern = vim_search_pattern()
 	local current_marker = vim.fn.search(pattern, "bcnW")
 	local insert_line
@@ -159,6 +177,9 @@ function M.insert_markdown_above()
 end
 
 function M.insert_markdown_below()
+	if not ensure_modifiable() then
+		return
+	end
 	local pattern = vim_search_pattern()
 	local next_marker = vim.fn.search(pattern, "nW")
 	local insert_line
@@ -172,6 +193,9 @@ function M.insert_markdown_below()
 end
 
 function M.toggle_cell_type()
+	if not ensure_modifiable() then
+		return
+	end
 	local pattern = vim_search_pattern()
 	local cell_start = vim.fn.search(pattern, "bcnW")
 	if cell_start == 0 then
@@ -180,15 +204,26 @@ function M.toggle_cell_type()
 	local line = vim.fn.getline(cell_start)
 	local new_line
 	if line:match("%[markdown%]") then
-		new_line = config.cell_marker
+		-- markdown -> code: strip the tag, keep any title text
+		new_line = (line:gsub("%s*%[markdown%]", "", 1))
 	else
-		new_line = config.cell_marker .. " [markdown]"
+		-- code -> markdown: insert the tag between marker and title
+		local marker_prefix = vim.pesc(config.cell_marker)
+		local rest = line:match("^" .. marker_prefix .. "%s*(.*)$") or ""
+		if rest ~= "" then
+			new_line = config.cell_marker .. " [markdown] " .. rest
+		else
+			new_line = config.cell_marker .. " [markdown]"
+		end
 	end
 	vim.api.nvim_buf_set_lines(0, cell_start - 1, cell_start, false, { new_line })
 	return true
 end
 
 function M.merge_cell_below()
+	if not ensure_modifiable() then
+		return false
+	end
 	local pattern = vim_search_pattern()
 	local next_marker = vim.fn.search(pattern, "nW")
 	if next_marker == 0 then
@@ -199,6 +234,9 @@ function M.merge_cell_below()
 end
 
 function M.split_cell()
+	if not ensure_modifiable() then
+		return
+	end
 	local cursor_line = vim.api.nvim_win_get_cursor(0)[1]
 	vim.fn.append(cursor_line - 1, { config.cell_marker })
 end
@@ -236,6 +274,11 @@ function M.run_cell(opts)
 
 	if opts.advance then
 		vim.defer_fn(function()
+			-- The user may have switched buffers during the settle delay;
+			-- the advance must never jump a cursor in the wrong buffer
+			if vim.api.nvim_get_current_buf() ~= bufnr then
+				return
+			end
 			local found = vim.fn.search(vim_search_pattern(), "W")
 			if found == 0 then
 				vim.notify("Last cell", vim.log.levels.INFO)
