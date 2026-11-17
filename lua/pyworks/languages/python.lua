@@ -672,6 +672,21 @@ function M.install_packages(package_list, filepath, opts)
 	return true
 end
 
+-- Missing-packages state key honoring packages.sync_scope ("project":
+-- per-project lists, the Colab-like default; "global": one shared list).
+-- Defined BEFORE its callers (handle_file / install_missing_packages) —
+-- a local defined below them resolves as a global nil at call sites.
+local function missing_packages_key(filepath)
+	local ok, pyworks = pcall(require, "pyworks")
+	local cfg = ok and pyworks.get_config and pyworks.get_config() or nil
+	local scope = (cfg and cfg.packages and cfg.packages.sync_scope) or "project"
+	if scope == "project" then
+		local project_dir = utils.get_project_paths(filepath)
+		return state.KEYS.MISSING_PACKAGES .. "python_" .. (project_dir or "global")
+	end
+	return state.KEYS.MISSING_PACKAGES .. "python"
+end
+
 -- Ensure Python environment is ready
 function M.ensure_environment(filepath)
 	-- Use provided filepath or fall back to current buffer
@@ -733,19 +748,6 @@ function M.handle_file(filepath, opts)
 		local jupytext = require("pyworks.notebook.jupytext")
 		jupytext.ensure_jupytext()
 	end
-end
-
--- Missing-packages state key honoring packages.sync_scope ("project":
--- per-project lists, the Colab-like default; "global": one shared list)
-local function missing_packages_key(filepath)
-	local ok, pyworks = pcall(require, "pyworks")
-	local cfg = ok and pyworks.get_config and pyworks.get_config() or nil
-	local scope = (cfg and cfg.packages and cfg.packages.sync_scope) or "project"
-	if scope == "project" then
-		local project_dir = utils.get_project_paths(filepath)
-		return state.KEYS.MISSING_PACKAGES .. "python_" .. (project_dir or "global")
-	end
-	return state.KEYS.MISSING_PACKAGES .. "python"
 end
 
 -- Install missing packages command

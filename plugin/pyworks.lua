@@ -15,14 +15,6 @@ end
 -- Create autocmd group for pyworks
 local augroup = vim.api.nvim_create_augroup("Pyworks", { clear = true })
 
--- Check if a file is in a pyworks-managed directory using utils.find_project_root
-local function is_pyworks_project(filepath)
-	local dir = filepath and vim.fn.fnamemodify(filepath, ":h") or vim.fn.getcwd()
-	local utils = require("pyworks.utils")
-	local project_root = utils.find_project_root(dir)
-	return project_root ~= nil
-end
-
 -- Set up autocmds for file detection
 vim.api.nvim_create_autocmd({ "BufReadPost", "BufNewFile" }, {
 	group = augroup,
@@ -55,11 +47,6 @@ vim.api.nvim_create_autocmd("BufWritePost", {
 	group = augroup,
 	pattern = { "*.py", "*.ipynb" },
 	callback = function(ev)
-		-- Only run in project directories (check the file's location)
-		if not is_pyworks_project(ev.file) then
-			return
-		end
-
 		vim.defer_fn(function()
 			local detector = require("pyworks.core.detector")
 			detector.rescan_imports(ev.file)
@@ -82,17 +69,9 @@ vim.api.nvim_create_autocmd("FileType", {
 		local config = pyworks.get_config()
 		local skip_keymaps = config.skip_keymaps
 
-		-- Only set up keymaps in project directories (check the file's location)
-		local filepath = vim.api.nvim_buf_get_name(ev.buf)
-		if not is_pyworks_project(filepath) then
-			-- Still set up Molten keymaps even outside projects (unless skip_keymaps)
-			if not skip_keymaps then
-				local keymaps = require("pyworks.keymaps")
-				keymaps.setup_buffer_keymaps()
-				keymaps.setup_molten_keymaps()
-			end
-			return
-		end
+		-- NOTE: there is no "project-only" gate here: find_project_root()
+		-- always resolves (fallback = file dir / cwd), so the old gate was
+		-- dead code. Zero-config doctrine: every Python file IS a project.
 
 		-- Skip all keymaps if user requested
 		if skip_keymaps then
@@ -105,6 +84,7 @@ vim.api.nvim_create_autocmd("FileType", {
 		-- Package installation is handled by the single global ft-gated
 		-- <leader>pi -> :PyworksSync map (setup()); a buffer-local duplicate
 		-- shadowed it with divergent behavior.
+		local filepath = vim.api.nvim_buf_get_name(ev.buf)
 
 		-- Set up cell execution keymaps for Molten
 		local keymaps = require("pyworks.keymaps")
@@ -394,9 +374,19 @@ vim.api.nvim_create_autocmd("BufWinEnter", {
 
 			-- Defer to let other handlers complete first
 			vim.defer_fn(function()
-				-- Re-check recursion guard in deferred callback
+				-- Re-check recursion guard in deferred callback. A reload in
+				-- progress elsewhere must not strand this notebook as raw
+				-- JSON: re-queue instead of silently abandoning.
 				if guard.is_reloading() then
 					pcall(vim.api.nvim_buf_del_var, ev.buf, "pyworks_notebook_processing")
+					vim.defer_fn(function()
+						if vim.api.nvim_buf_is_valid(ev.buf) and guard.is_reloading() then
+							vim.notify(
+								"[pyworks] Notebook reload still busy; run :PyworksReloadNotebook to retry conversion",
+								vim.log.levels.WARN
+							)
+						end
+					end, 1500)
 					return
 				end
 

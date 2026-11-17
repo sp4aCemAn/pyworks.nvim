@@ -770,6 +770,16 @@ function M.setup_buffer_keymaps()
 	end
 	vim.keymap.set("n", "<leader>jm", format_md, vim.tbl_extend("force", opts, { desc = "Format markdown cell" }))
 	vim.keymap.set("n", "<leader>jfm", format_md, vim.tbl_extend("force", opts, { desc = "Format markdown cell" }))
+
+	-- Debug command: dump all extmarks to see Molten's output format.
+	-- Previously registered at module load (side-effecting require).
+	vim.api.nvim_create_user_command("PyworksDebugExtmarks", function()
+		local bufnr = vim.api.nvim_get_current_buf()
+		vim.notify("[DEBUG] Dumping all extmarks with virtual text:", vim.log.levels.INFO)
+		debug_dump_extmarks(bufnr)
+		local highest = get_highest_completed_output(bufnr)
+		vim.notify(string.format("[DEBUG] Highest completed output: Out[%d]", highest), vim.log.levels.INFO)
+	end, { desc = "Debug: dump all extmarks to see Molten output format" })
 end
 
 -- Set up Molten kernel management keymaps
@@ -821,15 +831,5 @@ M._wait_for_cell_completion = wait_for_cell_completion
 M._debug_dump_extmarks = debug_dump_extmarks
 M._get_molten_namespace = get_molten_namespace
 M._invalidate_molten_ns_cache = invalidate_molten_ns_cache
-
--- Debug command: dump all extmarks to see Molten's output format
--- Always available for troubleshooting completion detection
-vim.api.nvim_create_user_command("PyworksDebugExtmarks", function()
-	local bufnr = vim.api.nvim_get_current_buf()
-	vim.notify("[DEBUG] Dumping all extmarks with virtual text:", vim.log.levels.INFO)
-	debug_dump_extmarks(bufnr)
-	local highest = get_highest_completed_output(bufnr)
-	vim.notify(string.format("[DEBUG] Highest completed output: Out[%d]", highest), vim.log.levels.INFO)
-end, { desc = "Debug: dump all extmarks to see Molten output format" })
 
 return M

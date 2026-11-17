@@ -38,6 +38,7 @@ local cell_numbers_ns = nil
 local cleanup_augroup = vim.api.nvim_create_augroup("PyworksExecutedCellsCleanup", { clear = true })
 vim.api.nvim_create_autocmd("BufDelete", {
 	group = cleanup_augroup,
+	desc = "Pyworks: clean executed-cell state and numbering augroup on buffer delete",
 	callback = function(ev)
 		M.executed_cells[ev.buf] = nil
 		-- Clean up buffer-specific augroup to prevent orphaned augroups
@@ -253,6 +254,7 @@ function M.setup_buffer(opts)
 		vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
 			group = augroup,
 			buffer = bufnr,
+			desc = "Pyworks: debounce cell-number refresh after edits",
 			callback = function()
 				if debounce_timers[bufnr] then
 					debounce_timers[bufnr]:stop()
@@ -278,11 +280,13 @@ function M.setup_buffer(opts)
 		vim.api.nvim_create_autocmd("BufEnter", {
 			group = augroup,
 			buffer = bufnr,
+			desc = "Pyworks: refresh cell numbers on buffer enter",
 			callback = M.number_cells,
 		})
 		vim.api.nvim_create_autocmd("BufDelete", {
 			group = augroup,
 			buffer = bufnr,
+			desc = "Pyworks: stop cell-number debounce timer on buffer delete",
 			callback = function()
 				if debounce_timers[bufnr] then
 					debounce_timers[bufnr]:stop()
@@ -416,7 +420,13 @@ function M.create_floating_window(title, content, opts)
 		group = float_augroup,
 		buffer = buf,
 		once = true,
-		callback = close,
+		desc = "Pyworks: close floating window on leave",
+		callback = function()
+			-- The once-autocmd removes itself; delete the augroup so the
+			-- per-float group doesn't accumulate across open/close cycles
+			pcall(vim.api.nvim_del_augroup_by_name, "PyworksFloat_" .. buf)
+			close()
+		end,
 	})
 
 	return buf, win
