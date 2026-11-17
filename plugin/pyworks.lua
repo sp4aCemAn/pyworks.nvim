@@ -102,11 +102,9 @@ vim.api.nvim_create_autocmd("FileType", {
 			return
 		end
 
-		-- Package installation keymap
-		vim.keymap.set("n", "<leader>pi", function()
-			local python = require("pyworks.languages.python")
-			python.install_missing_packages()
-		end, { buffer = true, desc = "Pyworks: Install missing packages" })
+		-- Package installation is handled by the single global ft-gated
+		-- <leader>pi -> :PyworksSync map (setup()); a buffer-local duplicate
+		-- shadowed it with divergent behavior.
 
 		-- Set up cell execution keymaps for Molten
 		local keymaps = require("pyworks.keymaps")
@@ -211,6 +209,9 @@ local function reload_notebook_buffer(filepath, opts)
 		-- This prevents IndexError when Molten tries to access invalid extmark positions
 		if vim.fn.exists(":MoltenDeinit") == 2 then
 			pcall(vim.cmd, "MoltenDeinit")
+			-- The flag outlives :edit (same buffer object); stale "initialized"
+			-- makes run-all/evaluate silently fail post-reload
+			vim.b[bufnr].molten_initialized = nil
 		end
 
 		-- Ensure notebook handler is configured before reloading
@@ -286,6 +287,8 @@ vim.api.nvim_create_autocmd("SessionLoadPost", {
 						vim.api.nvim_buf_call(bufnr, function()
 							pcall(vim.cmd, "MoltenDeinit")
 						end)
+						-- Keep the buffer flag in sync with the deinit
+						vim.b[bufnr].molten_initialized = nil
 					end
 				end
 			end

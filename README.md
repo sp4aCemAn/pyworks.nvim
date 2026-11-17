@@ -142,7 +142,7 @@ For inline plot/image display:
 | `<leader>jt` | Toggle cell type (code ↔ markdown) |
 | `<leader>jJ` | Merge with cell below      |
 | `<leader>js` | Split cell at cursor       |
-| `<leader>jfm` | Format markdown cell (via `notebooks.md_formatter`) |
+| `<leader>jm` | Format markdown cell (via `notebooks.md_formatter`; `<leader>jfm` alias) |
 
 ### Cell Folding & UI
 

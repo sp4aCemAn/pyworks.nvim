@@ -509,7 +509,7 @@ function M.setup_buffer_keymaps()
 				if i > #cells then
 					run_all_in_progress[bufnr] = nil
 					with_suppressed_events(function()
-						ui.enter_cell(cells[#cells].marker_line, { insert_mode = false })
+						ui.enter_cell(cells[#cells].marker_line, { insert_mode = false, append = false })
 					end)
 					vim.notify("All cells executed", vim.log.levels.INFO)
 					return
@@ -560,7 +560,7 @@ function M.setup_buffer_keymaps()
 				local next_cell = cells[i + 1]
 				if next_cell then
 					with_suppressed_events(function()
-						ui.enter_cell(next_cell.marker_line, { insert_mode = false })
+						ui.enter_cell(next_cell.marker_line, { insert_mode = false, append = false })
 					end)
 				end
 
@@ -775,10 +775,14 @@ function M.setup_buffer_keymaps()
 		end
 	end, vim.tbl_extend("force", opts, { desc = "Previous cell" }))
 
-	-- Format markdown cell content (independent of Molten; notebooks.md_formatter)
-	vim.keymap.set("n", "<leader>jfm", function()
+	-- Format markdown cell content (independent of Molten; notebooks.md_formatter).
+	-- Primary: <leader>jm (keeps <leader>jf unshadowed so fold toggling is
+	-- instant); <leader>jfm kept as an alias for muscle memory.
+	local format_md = function()
 		require("pyworks.commands.format_cell").format_current_cell()
-	end, vim.tbl_extend("force", opts, { desc = "Format markdown cell with notebooks.md_formatter" }))
+	end
+	vim.keymap.set("n", "<leader>jm", format_md, vim.tbl_extend("force", opts, { desc = "Format markdown cell" }))
+	vim.keymap.set("n", "<leader>jfm", format_md, vim.tbl_extend("force", opts, { desc = "Format markdown cell" }))
 end
 
 -- Set up Molten kernel management keymaps

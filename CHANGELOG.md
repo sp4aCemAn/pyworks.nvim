@@ -6,6 +6,11 @@ All notable changes to pyworks.nvim will be documented in this file.
 
 ### Added
 
+- **`packages.sync_scope` config option** (`"project"` default, or
+  `"global"`): missing-package detection for `<leader>pi`/`:PyworksSync`
+  is tracked per project (Colab-like: each project sees and installs its
+  own detected missing packages) instead of one shared list. Invalid
+  values warn without crashing.
 - **Notebook LSP diagnostics silencing** (`notebooks.lsp`, default
   `"silence"`): jupytext percent scripts store markdown cell bodies as raw
   text, so Python servers (pylsp, pyright) reported syntax errors on those
@@ -107,6 +112,22 @@ All notable changes to pyworks.nvim will be documented in this file.
   markview.nvim remains the richer treesitter-based option for styled
   markdown. Users setting the option can delete the line — unknown
   `notebooks.*` keys are ignored.
+
+### Changed
+
+- **`<leader>jm` is the markdown-format keymap** (was `<leader>jfm`): it
+  shadowed `<leader>jf` (fold toggle), stalling every fold toggle for
+  `timeoutlen`. `<leader>jfm` still works as an alias. `<leader>pi` is now
+  a single map (the buffer-local duplicate with divergent behavior is
+  gone) routed through the ft-gated `:PyworksSync`.
+- **Run-all cursor parking no longer edits the buffer**: parking the
+  cursor after the last cell appended an empty line to the notebook;
+  navigation now lands on the marker instead (`enter_cell` gained an
+  `append = false` mode — the interactive `enter_first_cell` path keeps
+  the old behavior).
+- **`molten_initialized` is cleared on every Molten deinit**: after a
+  notebook reload or session restore, the stale buffer flag made run-all
+  and `<leader>jl` silently fail until the user re-initialized.
 
 ### Fixed
 

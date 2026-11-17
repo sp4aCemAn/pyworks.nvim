@@ -264,6 +264,19 @@ describe("ui", function()
 			assert.equals(2, #lines)
 			assert.equals("", lines[2])
 		end)
+
+		it("append=false parks on the marker instead of editing the buffer", function()
+			vim.api.nvim_buf_set_lines(test_bufnr, 0, -1, false, {
+				"# %% Cell 1",
+			})
+
+			ui.enter_cell(1, { insert_mode = false, append = false })
+
+			local lines = vim.api.nvim_buf_get_lines(test_bufnr, 0, -1, false)
+			assert.equals(1, #lines, "buffer must not gain a line")
+			local cursor = vim.api.nvim_win_get_cursor(0)
+			assert.equals(1, cursor[1])
+		end)
 	end)
 
 	describe("enter_first_cell", function()

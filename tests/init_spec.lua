@@ -215,4 +215,34 @@ describe("pyworks", function()
 			assert.is_true(found, "expected a config warning mentioning notebooks.lsp")
 		end)
 	end)
+
+	describe("packages config", function()
+		it("should default packages.sync_scope to project", function()
+			local pyworks = require("pyworks")
+			pyworks.setup()
+			assert.equals("project", pyworks.get_config().packages.sync_scope)
+		end)
+
+		it("should warn on an invalid sync_scope without erroring", function()
+			local pyworks = require("pyworks")
+
+			vim.g.pyworks_setup_complete = nil
+			local notifications_seen = {}
+			local notify_orig = vim.notify
+			vim.notify = function(msg, level)
+				table.insert(notifications_seen, { msg = tostring(msg), level = level })
+			end
+			local ok = pcall(pyworks.setup, { packages = { sync_scope = "bogus" } })
+			vim.notify = notify_orig
+
+			assert.is_true(ok, "invalid packages.sync_scope must not error")
+			local found = false
+			for _, n in ipairs(notifications_seen) do
+				if n.msg:match("packages%.sync_scope") then
+					found = true
+				end
+			end
+			assert.is_true(found, "expected a config warning mentioning packages.sync_scope")
+		end)
+	end)
 end)

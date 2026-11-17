@@ -38,6 +38,10 @@ local default_config = {
 			"^utils$",
 			"^helpers$",
 		},
+		-- Missing-package tracking scope for <leader>pi / :PyworksSync:
+		-- "project" (Colab-like: each project tracks its own detected
+		-- missing packages) or "global" (one shared list).
+		sync_scope = "project",
 	},
 	cache = {
 		kernel_list = 60, -- Cache TTL in seconds
@@ -109,6 +113,18 @@ local function validate_config(user_opts)
 		for key, value in pairs(user_opts.cache) do
 			if type(value) ~= "number" then
 				table.insert(warnings, string.format("cache.%s should be number (seconds)", key))
+			end
+		end
+	end
+
+	-- Check packages config
+	if user_opts.packages then
+		local valid_sync_scopes = { project = true, global = true }
+		if user_opts.packages.sync_scope ~= nil then
+			if
+				type(user_opts.packages.sync_scope) ~= "string" or not valid_sync_scopes[user_opts.packages.sync_scope]
+			then
+				table.insert(warnings, "packages.sync_scope should be one of 'project', 'global'")
 			end
 		end
 	end
@@ -545,7 +561,7 @@ vim.api.nvim_create_user_command("PyworksHelp", function()
 		"    :PyworksFormatMarkdownCell    Format md cell       <leader>jt   Toggle code/markdown",
 		"    <leader>ja   Insert code cell above             <leader>jJ   Merge with cell below",
 		"    <leader>jb   Insert code cell below             <leader>js   Split cell at cursor",
-		"    <leader>jma  Insert markdown above              <leader>jfm  Format markdown cell",
+		"    <leader>jma  Insert markdown above              <leader>jm   Format markdown cell",
 		"    <leader>jmb  Insert markdown below",
 		"",
 		"  OUTPUT MANAGEMENT                               CELL FOLDING",

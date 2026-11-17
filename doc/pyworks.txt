@@ -126,7 +126,8 @@ CELL SELECTION & NAVIGATION~
 *<leader>j]*  Next cell (Normal mode)
 *<leader>j[*  Previous cell (Normal mode)
 *<leader>jg*  Go to cell N (prompt) (Normal mode)
-*<leader>jfm* Format markdown cell with notebooks.md_formatter (Normal mode)
+*<leader>jm*  Format markdown cell with notebooks.md_formatter (Normal mode)
+	(<leader>jfm kept as an alias; <leader>jf toggles folding instantly)
 
 OUTPUT MANAGEMENT~
 
@@ -164,6 +165,8 @@ KERNEL MANAGEMENT~
 PACKAGE MANAGEMENT~
 
 *<leader>pi*  Install missing packages
+	Missing packages are tracked per project by default
+	(`packages.sync_scope = "project"`; "global" for one shared list).
 *<leader>ps*  Show package status
 
 ==============================================================================
