@@ -2,10 +2,11 @@
 --
 -- Doctrine: the percent script IS the buffer; notebook feel comes from
 -- presentation chrome. Canonical jupytext markdown content is commented
--- ("# text"); this module hides exactly that leading "# " (or bare "#" on
--- empty md lines) with a window-local matchadd range over the markdown
--- content lines from the canonical cell model, so md cells read as
--- markdown while the buffer stays valid Python.
+-- ("# text"); this module hides the leading "#" plus optional space on
+-- markdown content lines (including bare "#" on empty md lines) with a
+-- window-local matchadd range over the markdown content lines from the
+-- canonical cell model, so md cells read as markdown while the buffer
+-- stays valid Python.
 --
 -- Spike findings baked in (docs/UX_MODEL_A_REFACTOR.md "F6 SPIKE
 -- findings"):
@@ -31,8 +32,11 @@ local ui = require("pyworks.ui")
 local PRIORITY = 20
 local DEBOUNCE_MS = 150
 
--- winid -> match id; bufnr -> uv timer
+-- winid -> match id; winid -> user's pre-chrome conceal options;
+-- winid -> { bufnr } last applied; bufnr -> uv timer
 local win_matches = {}
+local win_saved_opts = {}
+local win_state = {}
 local rebuild_timers = {}
 
 -- Lazy require mirrors the get_mode()/get_packages() cycle-break pattern:
@@ -90,9 +94,25 @@ local function apply_window(winid)
 	end
 	local ok_buf, bufnr = pcall(vim.api.nvim_win_get_buf, winid)
 	if not ok_buf or not notebook_lsp.is_notebook_buf(bufnr) then
+		-- The window left the notebook (or never was one): restore the
+		-- user's conceal options and drop our match. Window-local matchadd
+		-- matches AND options survive a buffer switch — without this the
+		-- stale line ranges would conceal unrelated buffers and
+		-- conceallevel=2 would hide text in other filetypes.
 		drop_match(winid)
+		local saved = win_saved_opts[winid]
+		if saved then
+			vim.api.nvim_win_call(winid, function()
+				vim.wo.conceallevel = saved.conceallevel
+				vim.wo.concealcursor = saved.concealcursor
+			end)
+			win_saved_opts[winid] = nil
+		end
+		win_state[winid] = nil
 		return false
 	end
+
+	local is_new_buffer = (not win_state[winid]) or win_state[winid].bufnr ~= bufnr
 
 	drop_match(winid)
 
@@ -101,17 +121,31 @@ local function apply_window(winid)
 	end
 
 	vim.api.nvim_win_call(winid, function()
-		vim.wo.conceallevel = 2
-		vim.wo.concealcursor = "nvi"
-		if fold_default_enabled() then
-			ui.setup_cell_folding()
-			vim.wo.foldlevel = 1
+		if is_new_buffer then
+			-- Save the user's options once per buffer entry; they are
+			-- restored when this window leaves the notebook.
+			if not win_saved_opts[winid] then
+				win_saved_opts[winid] = {
+					conceallevel = vim.wo.conceallevel,
+					concealcursor = vim.wo.concealcursor,
+				}
+			end
+			vim.wo.conceallevel = 2
+			vim.wo.concealcursor = "nvi"
+			if fold_default_enabled() then
+				ui.setup_cell_folding()
+				-- foldlevel is set ONLY on buffer entry, not on every
+				-- debounced refresh — otherwise manually opened folds
+				-- re-collapse ~150 ms after every edit
+				vim.wo.foldlevel = 1
+			end
 		end
 		local pattern = conceal_pattern(bufnr)
 		if pattern then
 			win_matches[winid] = vim.fn.matchadd("Conceal", pattern, PRIORITY, -1, { conceal = "" })
 		end
 	end)
+	win_state[winid] = { bufnr = bufnr }
 	return true
 end
 
@@ -137,20 +171,26 @@ function M.refresh(bufnr)
 end
 
 local function schedule_refresh(bufnr)
-	local timer = rebuild_timers[bufnr]
-	if not timer then
-		timer = vim.uv.new_timer()
-		rebuild_timers[bufnr] = timer
-	end
-	timer:stop()
-	if timer:is_closing() then
+	local old = rebuild_timers[bufnr]
+	if old then
+		if not old:is_closing() then
+			old:stop()
+			old:close()
+		end
 		rebuild_timers[bufnr] = nil
-		return
 	end
+
+	local timer = vim.uv.new_timer()
+	rebuild_timers[bufnr] = timer
 	timer:start(
 		DEBOUNCE_MS,
 		0,
 		vim.schedule_wrap(function()
+			-- One-shot: forget and close the timer so idle timers don't linger
+			rebuild_timers[bufnr] = nil
+			if timer and not timer:is_closing() then
+				timer:close()
+			end
 			if vim.api.nvim_buf_is_valid(bufnr) then
 				M.refresh(bufnr)
 			end
@@ -165,13 +205,13 @@ function M.setup()
 
 	vim.api.nvim_create_autocmd({ "BufWinEnter", "WinEnter" }, {
 		group = group,
-		desc = "Pyworks: apply markdown concealment chrome to notebook windows",
-		callback = function(ev)
-			if notebook_lsp.is_notebook_buf(ev.buf) then
-				-- ev.match is the matched FILE pattern; the window is the
-				-- current one during BufWinEnter/WinEnter
-				apply_window(vim.api.nvim_get_current_win())
-			end
+		desc = "Pyworks: apply markdown chrome to notebook windows, clean up when leaving",
+		callback = function()
+			-- Unconditional: apply_window both applies chrome for notebook
+			-- buffers and restores user options/drops stale matches for
+			-- windows that left a notebook (window-local matchadd and
+			-- conceal options would otherwise leak onto the new buffer).
+			apply_window(vim.api.nvim_get_current_win())
 		end,
 	})
 
@@ -187,11 +227,13 @@ function M.setup()
 
 	vim.api.nvim_create_autocmd("WinClosed", {
 		group = group,
-		desc = "Pyworks: forget concealment match of closed window",
+		desc = "Pyworks: forget concealment state of closed window",
 		callback = function(ev)
 			local winid = tonumber(ev.match)
 			if winid then
 				win_matches[winid] = nil
+				win_saved_opts[winid] = nil
+				win_state[winid] = nil
 			end
 		end,
 	})

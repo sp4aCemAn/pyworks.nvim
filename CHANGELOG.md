@@ -110,6 +110,14 @@ All notable changes to pyworks.nvim will be documented in this file.
 
 ### Fixed
 
+- **Markdown concealment no longer leaks into non-notebook buffers**:
+  window-local `matchadd` matches and the `conceallevel=2`/`concealcursor`
+  overrides survived a buffer switch in the same window, so a stale
+  line-range pattern could conceal unrelated buffers. Entering a
+  non-notebook buffer in a window that had notebook chrome now deletes the
+  match and restores the user's own conceal options (saved at entry).
+  `md_fold_default` also no longer re-sets `foldlevel` on every debounced
+  refresh — manually opened folds survive typing.
 - **jupytext installation works on uv-created venvs**: the installer
   previously ran `venv/bin/pip install jupytext`, which does not exist in
   a uv venv (and the `python -m pip` fallback has no pip module either) —

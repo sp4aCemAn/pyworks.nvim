@@ -170,4 +170,39 @@ describe("notebook md_view", function()
 			assert.equals(">1", ui.cell_fold_expr())
 		end)
 	end)
+
+	describe("window lifecycle", function()
+		it("restores user conceal options and drops the match when the window leaves the notebook", function()
+			-- User's own settings, set BEFORE the notebook is entered
+			vim.wo.conceallevel = 1
+			vim.wo.concealcursor = "c"
+
+			make_notebook({ "# %% [markdown]", "# text", "# %%", "x = 1" })
+			md_view.refresh(bufnr)
+			assert.equals(1, #vim.fn.getmatches())
+			assert.equals(2, vim.wo.conceallevel)
+
+			local plain = vim.api.nvim_create_buf(false, true)
+			vim.api.nvim_buf_set_lines(plain, 0, -1, false, { "# ordinary comment" })
+			vim.api.nvim_set_current_buf(plain)
+			-- Drive the switch's autocmd explicitly (headless)
+			vim.api.nvim_exec_autocmds("BufWinEnter", { buffer = plain })
+
+			assert.equals(0, #vim.fn.getmatches(), "stale match must be deleted on leaving the notebook")
+			assert.equals(1, vim.wo.conceallevel, "user conceallevel must be restored")
+			assert.equals("c", vim.wo.concealcursor, "user concealcursor must be restored")
+
+			vim.api.nvim_buf_delete(plain, { force = true })
+		end)
+
+		it("does not reset foldlevel on debounced refreshes (manual folds survive)", function()
+			set_cfg({ md_conceal = true, md_fold_default = true })
+			make_notebook({ "# %%", "x = 1", "# %% [markdown]", "# text" })
+			md_view.refresh(bufnr)
+			assert.equals(1, vim.wo.foldlevel)
+			vim.wo.foldlevel = 3 -- as if the user opened folds
+			md_view.refresh(bufnr)
+			assert.equals(3, vim.wo.foldlevel, "refresh must not re-collapse folds")
+		end)
+	end)
 end)
