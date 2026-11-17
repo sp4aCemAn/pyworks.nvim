@@ -49,6 +49,14 @@ local function resolve_bufnr(bufnr)
 	return bufnr
 end
 
+-- Single-entry memo for for_buffer, keyed (bufnr, changedtick). The fold
+-- expression calls cell_at per marker line and the LSP silencer per
+-- publishDiagnostics — each was a full O(lines) re-scan (quadratic over a
+-- fold pass; ~1.3 s per recompute on a 16k-line notebook). changedtick
+-- invalidates the entry on any buffer edit, so staleness is impossible.
+-- Consumers must treat the returned cells as read-only.
+local memo = { bufnr = nil, tick = nil, cells = nil }
+
 -- Ordered cells for a buffer: preamble cell 0 (only when it has lines),
 -- then one cell per marker in order. Empty table for invalid buffers.
 function M.for_buffer(bufnr)
@@ -56,6 +64,11 @@ function M.for_buffer(bufnr)
 	bufnr = resolve_bufnr(bufnr)
 	if not vim.api.nvim_buf_is_valid(bufnr) then
 		return {}
+	end
+
+	local tick = vim.api.nvim_buf_get_changedtick(bufnr)
+	if memo.bufnr == bufnr and memo.tick == tick then
+		return memo.cells
 	end
 
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
@@ -92,6 +105,8 @@ function M.for_buffer(bufnr)
 			marker_text = marker.text,
 		})
 	end
+
+	memo = { bufnr = bufnr, tick = tick, cells = cells }
 	return cells
 end
 

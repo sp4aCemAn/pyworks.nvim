@@ -110,6 +110,14 @@ All notable changes to pyworks.nvim will be documented in this file.
 
 ### Fixed
 
+- **Notebook cell model is memoized per `(buffer, changedtick)`**: every
+  `cell_at` call re-scanned the whole buffer, so a fold-expression pass on
+  a large notebook with `notebooks.md_fold_default` cost O(markers ×
+  lines) — ~0.8 s per fold recompute at 1600 markers (and the LSP
+  diagnostic silencer paid a full scan per publish message). Structure is
+  now computed once per buffer edit; benchmarked 818 ms → 30 ms per fold
+  pass at 6401 lines (the residual is per-line marker checks, not model
+  scans).
 - **Markdown concealment no longer leaks into non-notebook buffers**:
   window-local `matchadd` matches and the `conceallevel=2`/`concealcursor`
   overrides survived a buffer switch in the same window, so a stale

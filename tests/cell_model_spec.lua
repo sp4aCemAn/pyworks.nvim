@@ -326,4 +326,33 @@ describe("core cell_model", function()
 			vim.api.nvim_buf_delete(bufnr, { force = true })
 		end)
 	end)
+
+	describe("for_buffer memoization", function()
+		it("reuses the same cells table until the buffer changes", function()
+			local bufnr = make_buf({ "# %%", "x = 1" })
+			local first = cell_model.for_buffer(bufnr)
+			local second = cell_model.for_buffer(bufnr)
+			assert.is_true(first == second, "unchanged tick must serve the memoized table")
+
+			-- An edit bumps changedtick: a fresh table reflecting the edit
+			vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "# %%", "x = 1", "# %%", "y = 2" })
+			local third = cell_model.for_buffer(bufnr)
+			assert.equals(2, #third, "edited buffer must be re-scanned, not memoized stale")
+			assert.is_false(third == first)
+
+			vim.api.nvim_buf_delete(bufnr, { force = true })
+		end)
+
+		it("does not leak the memo across different buffers", function()
+			local a = make_buf({ "# %%", "x = 1" })
+			local b = make_buf({ "# %%", "y = 2", "# %%", "z = 3" })
+			local cells_a = cell_model.for_buffer(a)
+			local cells_b = cell_model.for_buffer(b)
+			assert.equals(1, #cells_a)
+			assert.equals(2, #cells_b)
+
+			vim.api.nvim_buf_delete(a, { force = true })
+			vim.api.nvim_buf_delete(b, { force = true })
+		end)
+	end)
 end)
