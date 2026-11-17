@@ -283,6 +283,48 @@ local function read_notebook(bufnr, filepath)
 	end
 end
 
+-- Atomically write converted ipynb content: validate it is real notebook
+-- JSON BEFORE touching the target, write to a temp file in the same
+-- directory, then rename over the target. Any failure leaves the
+-- original file untouched (a truncated or failed conversion must never
+-- destroy the on-disk notebook).
+local function write_ipynb_content(filepath, ipynb_content)
+	if type(ipynb_content) ~= "string" or ipynb_content == "" then
+		return false, "conversion produced no output"
+	end
+
+	local ok_json, decoded = pcall(vim.fn.json_decode, ipynb_content)
+	if not ok_json or type(decoded) ~= "table" or decoded.nbformat == nil then
+		return false, "conversion output is not valid notebook JSON"
+	end
+
+	local tmp_path = filepath .. ".tmp"
+	local file, open_err = io.open(tmp_path, "w")
+	if not file then
+		return false, "cannot create temp file: " .. (open_err or "unknown error")
+	end
+
+	local write_ok, write_err = pcall(function()
+		file:write(ipynb_content)
+	end)
+	local close_ok, close_err = pcall(function()
+		file:close()
+	end)
+
+	if not write_ok or not close_ok then
+		os.remove(tmp_path)
+		return false, "failed to write temp file: " .. (write_err or close_err or "unknown error")
+	end
+
+	local renamed, rename_err = os.rename(tmp_path, filepath)
+	if not renamed then
+		os.remove(tmp_path)
+		return false, "failed to replace notebook file: " .. (rename_err or "unknown error")
+	end
+
+	return true, nil
+end
+
 -- Write notebook back to .ipynb format
 local function write_notebook(bufnr, filepath)
 	-- Get buffer content
@@ -297,18 +339,9 @@ local function write_notebook(bufnr, filepath)
 		return false
 	end
 
-	-- Write to file
-	local file, open_err = io.open(filepath, "w")
-	if not file then
-		notifications.notify_error("Failed to write file: " .. (open_err or "unknown error"))
-		return false
-	end
-
-	local write_ok, write_err = file:write(ipynb_content)
-	file:close()
-
-	if not write_ok then
-		notifications.notify_error("Failed to write content: " .. (write_err or "unknown error"))
+	local saved, save_err = write_ipynb_content(filepath, ipynb_content)
+	if not saved then
+		notifications.notify_error("Failed to save notebook: " .. (save_err or "unknown error"))
 		return false
 	end
 
@@ -316,6 +349,10 @@ local function write_notebook(bufnr, filepath)
 	notifications.notify("Notebook saved: " .. vim.fn.fnamemodify(filepath, ":t"), vim.log.levels.INFO)
 	return true
 end
+
+-- Exposed for tests (private-function convention: M._name)
+M._write_notebook = write_notebook
+M._write_ipynb_content = write_ipynb_content
 
 -- Setup notebook handling autocmds
 function M.setup_notebook_handler()

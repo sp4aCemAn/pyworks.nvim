@@ -110,6 +110,13 @@ All notable changes to pyworks.nvim will be documented in this file.
 
 ### Fixed
 
+- **Failed notebook saves can no longer corrupt the on-disk `.ipynb`**:
+  `:w` on a notebook buffer previously truncated the target file at open
+  and wrote jupytext's output directly — a failed/truncated conversion or a
+  disk-full mid-write destroyed the notebook with no backup. Saves are now
+  atomic: the conversion output is validated as real nbformat JSON *before*
+  the target is touched, written to a temp file in the same directory, and
+  renamed over the target; any failure leaves the original file untouched.
 - **Markdown cell formatter mangled canonical notebooks (`:PyworksFormatMarkdownCell` /
   `<leader>jfm`)**: jupytext percent stores markdown cell content commented
   (`# text`), but the formatter previously received the buffer lines verbatim
