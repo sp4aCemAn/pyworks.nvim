@@ -213,8 +213,18 @@ local function create_kernel_for_project(project_dir, venv_path, python_path)
 	local check_cmd = { python_path, "-c", "import ipykernel" }
 	local check_success, _, _ = utils.system_with_timeout(check_cmd, KERNEL_LIST_TIMEOUT_MS)
 	if not check_success then
+		-- uv-created venvs have no bin/pip: point the user at a command
+		-- that will actually work for their package manager
+		local install_hint
+		if vim.fn.executable(venv_path .. "/bin/pip") == 1 then
+			install_hint = string.format("%s/bin/pip install ipykernel", venv_path)
+		elseif vim.fn.executable("uv") == 1 then
+			install_hint = string.format("uv pip install --python %s/bin/python ipykernel", venv_path)
+		else
+			install_hint = string.format("install ipykernel into the virtual environment at %s", venv_path)
+		end
 		notifications.notify(
-			string.format("ipykernel not found in venv. Run: %s/bin/pip install ipykernel", venv_path),
+			string.format("ipykernel not found in venv. Run: %s", install_hint),
 			vim.log.levels.ERROR,
 			{ action_required = true }
 		)

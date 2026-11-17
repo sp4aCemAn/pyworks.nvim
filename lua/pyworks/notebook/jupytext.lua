@@ -80,6 +80,23 @@ function M.get_python_for_jupytext(filepath)
 	return nil
 end
 
+-- Build the jupytext install command for a python interpreter.
+-- uv-created venvs have NO bin/pip (and no pip module), so those route
+-- through `uv pip` against the interpreter; the bin/pip and -m pip
+-- branches only run when pip is actually present.
+local function build_install_command(python_path, venv_path)
+	local in_venv = venv_path and python_path:match(vim.pesc(venv_path)) ~= nil
+	if in_venv and vim.fn.executable(venv_path .. "/bin/pip") == 1 then
+		return { venv_path .. "/bin/pip", "install", "jupytext" }
+	end
+	if in_venv and vim.fn.executable("uv") == 1 then
+		return { "uv", "pip", "install", "--python", python_path, "jupytext" }
+	end
+	return { python_path, "-m", "pip", "install", "jupytext" }
+end
+
+M._build_install_command = build_install_command
+
 -- Install jupytext
 function M.install_jupytext(filepath)
 	local python_path = M.get_python_for_jupytext(filepath)
@@ -90,14 +107,7 @@ function M.install_jupytext(filepath)
 
 	notifications.progress_start("jupytext_install", "Installing Jupytext", "Installing notebook viewer...")
 
-	-- Determine pip command based on project
-	local _, venv_path = utils.get_project_paths(filepath)
-	local cmd
-	if venv_path and python_path:match(vim.pesc(venv_path)) then
-		cmd = { venv_path .. "/bin/pip", "install", "jupytext" }
-	else
-		cmd = { python_path, "-m", "pip", "install", "jupytext" }
-	end
+	local cmd = build_install_command(python_path, select(2, utils.get_project_paths(filepath)))
 
 	-- Use vim.system for modern Neovim 0.10+
 	local ok, _ = pcall(vim.system, cmd, { text = true }, function(obj)

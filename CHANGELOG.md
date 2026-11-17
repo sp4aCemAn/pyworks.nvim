@@ -110,6 +110,14 @@ All notable changes to pyworks.nvim will be documented in this file.
 
 ### Fixed
 
+- **jupytext installation works on uv-created venvs**: the installer
+  previously ran `venv/bin/pip install jupytext`, which does not exist in
+  a uv venv (and the `python -m pip` fallback has no pip module either) —
+  the install always failed with a generic error. The command is now
+  chosen by what is actually present: venv `bin/pip` → `uv pip
+  --python <interpreter>` → `-m pip`. The "ipykernel not found" hint in
+  kernel creation was likewise pip-only and now suggests the right
+  package-manager command.
 - **Typosquat reporting is now deterministic**: when a suspicious name is
   equidistant from two known packages (`scikit` → `scikit-image`/`scikit-learn`,
   `fast` → `dash`/`dask`), the reported "closest" package was chosen by

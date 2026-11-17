@@ -254,6 +254,65 @@ describe("jupytext atomic save (write_notebook end-to-end)", function()
 	end)
 end)
 
+describe("_build_install_command (uv-aware)", function()
+	local tmp_base
+	local orig_path
+
+	before_each(function()
+		tmp_base = vim.fn.tempname()
+		vim.fn.mkdir(tmp_base .. "/bin", "p")
+		orig_path = vim.env.PATH
+	end)
+
+	after_each(function()
+		vim.env.PATH = orig_path
+		vim.fn.delete(tmp_base, "rf")
+	end)
+
+	local function fake_executable(name)
+		local path = tmp_base .. "/bin/" .. name
+		vim.fn.writefile({ "#!/bin/sh" }, path)
+		vim.fn.setfperm(path, "rwxr-xr-x")
+		vim.env.PATH = tmp_base .. "/bin:" .. (vim.env.PATH or "")
+	end
+
+	it("uses venv/bin/pip when pip exists in the venv", function()
+		local venv = tmp_base .. "/.venv"
+		vim.fn.mkdir(venv .. "/bin", "p")
+		vim.fn.writefile({ "#!/bin/sh" }, venv .. "/bin/pip")
+		vim.fn.setfperm(venv .. "/bin/pip", "rwxr-xr-x")
+		local cmd = jupytext._build_install_command(venv .. "/bin/python", venv)
+		assert.same({ venv .. "/bin/pip", "install", "jupytext" }, cmd)
+	end)
+
+	it("routes uv venvs (no pip) through `uv pip --python`", function()
+		fake_executable("uv")
+		local venv = tmp_base .. "/.venv"
+		local cmd = jupytext._build_install_command(venv .. "/bin/python", venv)
+		assert.same({ "uv", "pip", "install", "--python", venv .. "/bin/python", "jupytext" }, cmd)
+	end)
+
+	it("falls back to -m pip outside a venv", function()
+		local cmd = jupytext._build_install_command("/usr/bin/python3", nil)
+		assert.same({ "/usr/bin/python3", "-m", "pip", "install", "jupytext" }, cmd)
+	end)
+
+	it("falls back to -m pip when the venv has neither pip nor uv", function()
+		-- Strip uv from PATH (the container ships it)
+		vim.env.PATH = tmp_base .. "/bin"
+		local venv = tmp_base .. "/.venv"
+		local cmd = jupytext._build_install_command(venv .. "/bin/python", venv)
+		assert.same({ venv .. "/bin/python", "-m", "pip", "install", "jupytext" }, cmd)
+	end)
+
+	it("treats an unrelated python as out-of-venv", function()
+		fake_executable("pip")
+		local venv = tmp_base .. "/.venv"
+		local cmd = jupytext._build_install_command("/usr/bin/python3", venv)
+		assert.same({ "/usr/bin/python3", "-m", "pip", "install", "jupytext" }, cmd)
+	end)
+end)
+
 describe("jupytext security", function()
 	it("should not contain sh -c wrapping pattern", function()
 		local source_path = "lua/pyworks/notebook/jupytext.lua"
