@@ -2,7 +2,14 @@
 
 All notable changes to pyworks.nvim will be documented in this file.
 
-## [Unreleased]
+## [0.4.0] - 2026-11-16
+
+Full code-review remediation release: data-integrity fixes (atomic notebook
+saves, reload safety), run-all hardening, the async conversion of every
+environment probe (no more multi-second UI freezes on file open), cache
+correctness, security wiring for package names, and a broad hygiene sweep.
+Every slice landed with its own regression tests; the containerized e2e
+smoke stayed at its known-upstream baseline throughout.
 
 ### Added
 
@@ -101,6 +108,11 @@ All notable changes to pyworks.nvim will be documented in this file.
 
 ### Removed
 
+- **`error_handler.wrap`** (dead code: zero callers): use `protected_call`
+  directly. Also removed the dead "project-only" gating in the plugin
+  loader — `find_project_root()` always resolves (fallback: file dir /
+  cwd), so every Python file is a project by doctrine and the old gates
+  never fired.
 - **`notebooks.markdown_highlight` + `notebook/markdown_hl.lua`** (added
   earlier in this same unreleased cycle, never in a release): the
   `pyworksMdCell` syntax region can never render on real notebook buffers —
@@ -128,8 +140,44 @@ All notable changes to pyworks.nvim will be documented in this file.
 - **`molten_initialized` is cleared on every Molten deinit**: after a
   notebook reload or session restore, the stale buffer flag made run-all
   and `<leader>jl` silently fail until the user re-initialized.
+- **User commands register in `setup()`**: the eight "manual" commands
+  (`:PyworksSetup`…`:PyworksHelp`) and `:PyworksDebugExtmarks` used to be
+  registered as side effects of module loading.
 
 ### Fixed
+
+- **`PyworksFormatMarkdownCell` stale-region race**: the formatter's
+  (up to 30s async) output was written to line numbers captured before
+  dispatch; any mid-flight edit landed output in the wrong place. The
+  callback now re-resolves the cell via the model (marker identity) and
+  bails with a notice if the layout moved. Multi-line range invocation
+  gets a friendly message instead of a bare Vim error.
+- **Notebook LSP silencing**: `uninstall()` now unwraps per-client handler
+  tables (previously they kept filtering until restart), the filtered
+  payload forwards all result fields (LSP 3.15+ `version`), and two
+  clients sharing one handler function are both wrapped.
+- **Notification dedup no longer poisoned by undisplayed messages**: the
+  dedup history only records messages that are actually shown; under
+  `silent_when_ready` a suppressed message no longer masks a real
+  duplicate 10s later.
+- **Kernel names are home-directory aware**: kernels created for projects
+  under the user's home no longer embed the username
+  (`james_myproj`-style names leaked across machines).
+- **Import extraction ignores comments**: comment text inside
+  parenthesized multiline imports ("use the fast one") was extracted as
+  import names — and "comment" is a real PyPI package, making it a live
+  (benign) supply-chain suggestion.
+- **image.nvim auto-setup defers to user lazy configs**: if the user's
+  lazy spec provides `config`/`opts` for image.nvim, pyworks no longer
+  pre-empts it with its own setup 100ms after startup.
+- **Misc**: environment-ready notification only fires when the essentials
+  probe finds nothing missing; package-install error buffers get unique
+  names (second failure no longer raises E95); "pip missing ⇒ uv"
+  classification requires uv to actually be available; jupytext PATH
+  dedup uses exact entry match (prefix dirs no longer skip prepending);
+  state convenience helpers honor the persistence save contract;
+  `show_error_details` guards its split against window limits;
+  `validate_filepath` accepts directories.
 
 - **Cell operations no longer lose marker titles, misclassify titles
   containing `[markdown]`, or error on nomodifiable buffers**:

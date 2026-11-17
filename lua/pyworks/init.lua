@@ -1,5 +1,5 @@
 -- pyworks.nvim - Zero-config Python notebook support
--- Version: 3.0.3
+-- Version: 0.4.0
 --
 -- Features:
 -- - Automatic environment setup for Python

@@ -43,7 +43,7 @@ return {
 }
 ```
 
-Dependencies (`jeryldev/molten-nvim`, `jeryldev/image.nvim`) are declared in pyworks' `lazy.lua` and installed automatically.
+Dependencies (`benlubas/molten-nvim`, `3rd/image.nvim`) are declared in pyworks' `lazy.lua` and installed automatically.
 
 Pyworks automatically:
 - **Handles .ipynb files directly** - Uses jupytext CLI to convert notebooks to percent-style Python (`# %%`)
@@ -296,9 +296,9 @@ require("pyworks").setup({
 4. **Kernel initialization** - Auto-starts Python kernel
 5. **Ready to code** - Use keymaps to execute code immediately
 
-### Molten Fork
+### Molten
 
-Pyworks uses a maintained fork ([jeryldev/molten-nvim](https://github.com/jeryldev/molten-nvim)) that includes bug fixes for dict iteration safety and MoltenTick reentrancy, baked directly into the source. No runtime patching is needed.
+Pyworks uses upstream [molten-nvim](https://github.com/benlubas/molten-nvim). The dict-iteration-safety namespace lookup ("molten-extmarks" exact match) and reload reentrancy handling live on the pyworks side, so no fork or runtime patching is needed.
 
 ### Project Detection
 
@@ -371,7 +371,7 @@ plugin/pyworks.lua          Entry point: autocmds (FileType, BufWinEnter, Sessio
 ### Common Issues
 
 **Q: `:PyworksDiagnostics` command not found**
-A: Fixed in v3.0.3. Update to the latest version. The command was previously registered in a module that wasn't loaded during startup.
+A: Fixed in v0.4.0. The command is now registered during setup().
 
 **Q: "No kernel initialized" warning when using `<leader>jj`**
 A: Press `<leader>jl` first to auto-initialize the kernel for the current file type.
@@ -448,7 +448,7 @@ MIT License - see [LICENSE](LICENSE) for details
 
 ## Acknowledgments
 
-- [molten-nvim](https://github.com/jeryldev/molten-nvim) - Jupyter integration for Neovim (fork of [benlubas/molten-nvim](https://github.com/benlubas/molten-nvim) with bug fixes)
-- [image.nvim](https://github.com/jeryldev/image.nvim) - Inline image rendering (fork of [3rd/image.nvim](https://github.com/3rd/image.nvim))
+- [molten-nvim](https://github.com/benlubas/molten-nvim) - Jupyter integration for Neovim
+- [image.nvim](https://github.com/3rd/image.nvim) - Inline image rendering
 - [jupytext](https://github.com/mwouts/jupytext) - Jupyter notebook conversion CLI
 - [uv](https://github.com/astral-sh/uv) - Lightning-fast Python package management
