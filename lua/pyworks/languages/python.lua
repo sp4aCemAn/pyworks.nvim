@@ -349,7 +349,7 @@ function M.install_essentials(filepath)
 				for _, pkg in ipairs(missing_essentials) do
 					state.mark_package_installed("python", pkg)
 				end
-				cache.invalidate("installed_packages_python")
+				cache.invalidate_pattern("^installed_packages_")
 			else
 				local error_msg = "Failed to install essential packages."
 				local filtered_errors = filter_pip_stderr(obj.stderr)
@@ -526,7 +526,7 @@ function M.install_packages(package_list, filepath, opts)
 				for _, pkg in ipairs(package_list) do
 					state.mark_package_installed("python", pkg)
 				end
-				cache.invalidate("installed_packages_python")
+				cache.invalidate_pattern("^installed_packages_")
 				cache.invalidate_pattern("imports_")
 			else
 				notifications.progress_finish("python_packages")
@@ -793,7 +793,7 @@ function M.uninstall_python_packages(packages_str)
 		vim.schedule(function()
 			if obj.code == 0 then
 				notifications.notify("Packages uninstalled successfully", vim.log.levels.INFO)
-				cache.invalidate("installed_packages_python")
+				cache.invalidate_pattern("^installed_packages_")
 			else
 				notifications.notify_error("Failed to uninstall some packages")
 			end

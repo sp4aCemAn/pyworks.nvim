@@ -1,6 +1,7 @@
 -- Test suite for pyworks.core.packages module
 -- Tests import detection and package mapping
 
+local cache = require("pyworks.core.cache")
 local packages = require("pyworks.core.packages")
 
 describe("packages", function()
@@ -261,6 +262,65 @@ describe("packages", function()
 			assert.is_true(vim.tbl_contains(imports, "os")) -- stdlib roots unaffected
 
 			vim.fn.delete(temp_file)
+		end)
+	end)
+
+	describe("installed-packages cache keying and invalidation", function()
+		after_each(function()
+			package.loaded["pyworks.languages.python"] = nil
+		end)
+
+		it("keys the cache per project root, so files in one project share an entry", function()
+			local root = vim.fn.tempname()
+			vim.fn.mkdir(root, "p")
+			vim.fn.mkdir(root .. "/sub", "p")
+			vim.fn.writefile({}, root .. "/pyproject.toml")
+			local f1 = root .. "/a.py"
+			local f2 = root .. "/sub/b.py"
+			vim.fn.writefile({}, f1)
+			vim.fn.writefile({}, f2)
+
+			local calls = 0
+			package.loaded["pyworks.languages.python"] = {
+				get_installed_packages = function()
+					calls = calls + 1
+					return { "requests" }
+				end,
+			}
+
+			local first = packages.get_installed_packages("python", f1)
+			local second = packages.get_installed_packages("python", f2)
+
+			assert.same(first, second)
+			assert.equals(1, calls, "second file in the same project must be served from cache")
+
+			vim.fn.delete(root, "rf")
+		end)
+
+		it("invalidate_pattern('^installed_packages_') clears every per-project entry", function()
+			local root = vim.fn.tempname()
+			vim.fn.mkdir(root, "p")
+			vim.fn.writefile({}, root .. "/pyproject.toml")
+			local f = root .. "/a.py"
+			vim.fn.writefile({}, f)
+
+			local calls = 0
+			package.loaded["pyworks.languages.python"] = {
+				get_installed_packages = function()
+					calls = calls + 1
+					return { "requests" }
+				end,
+			}
+
+			packages.get_installed_packages("python", f)
+			assert.equals(1, calls)
+
+			cache.invalidate_pattern("^installed_packages_")
+
+			packages.get_installed_packages("python", f)
+			assert.equals(2, calls, "entry must be re-fetched after pattern invalidation")
+
+			vim.fn.delete(root, "rf")
 		end)
 	end)
 end)

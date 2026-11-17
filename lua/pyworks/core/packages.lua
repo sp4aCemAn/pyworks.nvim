@@ -788,8 +788,11 @@ end
 
 -- Get installed packages for a language
 function M.get_installed_packages(language, filepath)
-	-- Include filepath in cache key to ensure we check the right project
-	local cache_key = "installed_packages_" .. language .. "_" .. (filepath or "global")
+	-- Key the cache per PROJECT (every file in one venv shares the same
+	-- installed list) instead of per file, so a whole project shares one
+	-- entry instead of duplicating one per file.
+	local project_root = require("pyworks.utils").get_project_paths(filepath)
+	local cache_key = "installed_packages_" .. language .. "_" .. (project_root or "global")
 	local cached = cache.get(cache_key)
 	if cached then
 		return cached

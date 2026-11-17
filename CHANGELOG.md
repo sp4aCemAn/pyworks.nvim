@@ -110,6 +110,14 @@ All notable changes to pyworks.nvim will be documented in this file.
 
 ### Fixed
 
+- **Stale "missing packages" state after every install/uninstall**: the
+  post-install callbacks invalidated the literal cache key
+  `installed_packages_python`, which never existed — real keys are
+  `installed_packages_<language>_<path>`, so the installed list stayed
+  stale for its full 5-minute TTL and `:PyworksSync`/`<leader>pi` kept
+  nagging about already-installed packages. Invalidation now uses a
+  `^installed_packages_` pattern, and the cache is keyed per project root
+  (one entry per venv) instead of per file.
 - **Run-all (`<leader>jR`) hardening**: a second press while a run is in
   progress is refused instead of starting an interleaved sequence that
   double-executed cells against the shared Out[N] completion counter, and
